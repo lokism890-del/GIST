@@ -1,3 +1,6 @@
+import { getUserEntitlements } from '@/lib/entitlements';
+import { getSession } from '@/lib/auth';
+
 import { NextRequest, NextResponse } from "next/server";
 import { summarizeAudio } from "@/lib/gist";
 

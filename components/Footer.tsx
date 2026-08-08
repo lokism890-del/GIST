@@ -1,45 +1,35 @@
-import Link from "next/link";
+import React from 'react';
+import Link from 'next/link';
 
 export default function Footer() {
   return (
-    <footer className="border-t border-hairline mt-16">
-      <div className="max-w-2xl mx-auto px-6 py-10 flex flex-col gap-8">
-        <div className="grid grid-cols-2 sm:grid-cols-4 gap-6 text-sm">
-          <FooterLink href="/privacy-policy">Privacy Policy</FooterLink>
-          <FooterLink href="/refund-policy">Refund Policy</FooterLink>
-          <FooterLink href="/terms">Terms &amp; Conditions</FooterLink>
-          <FooterLink href="/shipping-policy">Shipping Policy</FooterLink>
+    <footer className="w-full bg-stone-50 border-t border-stone-200 text-stone-500 py-12 px-6 transition-colors duration-300 d-header d-border d-text-secondary">
+      <div className="max-w-5xl mx-auto flex flex-col items-center justify-between gap-8 sm:flex-row sm:items-start">
+        
+        {/* Left Side: Branding & Copyright */}
+        <div className="flex flex-col items-center sm:items-start gap-2">
+          <Link href="/" className="flex flex-col text-center sm:text-left hover:opacity-70 transition-opacity duration-300 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 rounded">
+            <span className="text-xl font-bold tracking-tight text-stone-900 leading-none d-text-primary">GIST</span>
+            <span className="text-[9px] font-bold tracking-[0.25em] text-stone-400 uppercase mt-1 d-text-secondary">
+              Voice Intelligence
+            </span>
+          </Link>
+          <p className="text-xs text-stone-400 mt-3 d-text-secondary">
+            © {new Date().getFullYear()} GIST. All rights reserved.
+          </p>
         </div>
 
-        <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-3 text-xs text-slate border-t border-hairline pt-6">
-          <div className="flex flex-col gap-1">
-            <span>
-              Email:{" "}
-              <a href="mailto:lokism890@gmail.com" className="text-paper-dim hover:text-signal">
-                lokism890@gmail.com
-              </a>
-            </span>
-            <span>
-              Phone:{" "}
-              <a href="tel:+923357333789" className="text-paper-dim hover:text-signal">
-                +92 335 7333789
-              </a>
-            </span>
-            <span className="text-paper-dim">
-              Address: Dk Mehdi, Burhan, Hassan Abdal, Pakistan
-            </span>
+        {/* Right Side: Links & Support */}
+        <div className="flex flex-col items-center sm:items-end gap-4">
+          <div className="flex flex-wrap justify-center sm:justify-end gap-x-6 gap-y-3 text-sm font-medium">
+            <Link href="/privacy-policy" className="hover:text-stone-900 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 rounded px-1 d-hover-text">Privacy Policy</Link>
+            <Link href="/terms" className="hover:text-stone-900 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 rounded px-1 d-hover-text">Terms of Service</Link>
+            <Link href="/refund-policy" className="hover:text-stone-900 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 rounded px-1 d-hover-text">Refund Policy</Link>
+            <a href="mailto:lokism890@gmail.com" className="hover:text-stone-900 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 rounded px-1 d-hover-text">Support</a>
           </div>
-          <span>© 2026 Gist Tech. All rights reserved.</span>
         </div>
+
       </div>
     </footer>
-  );
-}
-
-function FooterLink({ href, children }: { href: string; children: React.ReactNode }) {
-  return (
-    <Link href={href} className="text-slate hover:text-signal transition-colors">
-      {children}
-    </Link>
   );
 }

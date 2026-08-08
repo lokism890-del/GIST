@@ -1,43 +1,19 @@
-import type { Metadata } from "next";
-import PolicyPage from "@/components/PolicyPage";
-
-export const metadata: Metadata = {
-  title: "Refund Policy — Gist Tech",
-};
+import React from 'react';
+import PolicyPage from '@/components/PolicyPage';
 
 export default function RefundPolicy() {
   return (
-    <PolicyPage title="Refund Policy" updated="August 2026">
-      <p>This policy applies to Gist Pro, the paid monthly subscription tier of Gist.</p>
-
-      <h2>No-refund policy</h2>
-      <p>
-        Gist Tech operates a no-refund policy for Gist Pro subscription payments.
-        Because access to paid features is granted immediately upon payment and usage
-        is metered per billing cycle, subscription charges are non-refundable once
-        processed.
-      </p>
-
-      <h2>Cancelling your subscription</h2>
-      <p>
-        You can cancel your Gist Pro subscription at any time from within the app, or
-        by emailing us. Cancelling stops all future billing — it does not refund the
-        current billing period you&rsquo;ve already paid for. You&rsquo;ll continue to
-        have Gist Pro access until the end of the period you&rsquo;ve already paid for.
-      </p>
-
-      <h2>Billing errors</h2>
-      <p>
-        If you believe you were charged in error — for example, charged twice for the
-        same period, or charged after you cancelled — contact us and we&rsquo;ll
-        investigate and correct genuine billing mistakes.
-      </p>
-
-      <h2>Contact</h2>
-      <p>
-        For billing questions, email{" "}
-        <a href="mailto:lokism890@gmail.com">lokism890@gmail.com</a>.
-      </p>
+    <PolicyPage title="Refund Policy">
+      <p className="text-sm text-stone-500 mb-8">Last updated: {new Date().toLocaleDateString()}</p>
+      
+      <h2 className="text-xl font-semibold text-stone-900 mt-10 mb-4">1. Subscription Cancellations</h2>
+      <p className="mb-6">You can cancel your GIST Pro subscription at any time. When you cancel, you will continue to have access to all Pro features until the end of your current billing period. No further charges will be applied after cancellation.</p>
+      
+      <h2 className="text-xl font-semibold text-stone-900 mt-10 mb-4">2. Refunds</h2>
+      <p className="mb-6">As GIST provides immediate access to digital processing resources and costly AI computing infrastructure, we generally do not offer refunds for partial subscription months or past usage. We offer a Free Tier specifically so users can test the accuracy and functionality of our service prior to upgrading.</p>
+      
+      <h2 className="text-xl font-semibold text-stone-900 mt-10 mb-4">3. Exceptions</h2>
+      <p className="mb-6">Refunds may be granted on a case-by-case basis at our sole discretion, such as in the event of demonstrable billing errors or significant, prolonged service outages that prevented you from using the platform you paid for. Please contact support to initiate a review.</p>
     </PolicyPage>
   );
 }

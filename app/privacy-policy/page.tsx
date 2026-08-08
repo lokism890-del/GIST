@@ -1,61 +1,30 @@
-import type { Metadata } from "next";
-import PolicyPage from "@/components/PolicyPage";
-
-export const metadata: Metadata = {
-  title: "Privacy Policy — Gist Tech",
-};
+import React from 'react';
+import PolicyPage from '@/components/PolicyPage';
 
 export default function PrivacyPolicy() {
   return (
-    <PolicyPage title="Privacy Policy" updated="August 2026">
-      <p>
-        Gist Tech (&ldquo;we&rdquo;, &ldquo;us&rdquo;) builds Gist, a voice-note assistant
-        available through WhatsApp and the web. This policy explains what
-        information we handle and how.
-      </p>
-
-      <h2>What we process</h2>
-      <ul>
-        <li>Voice notes you send to Gist, solely to transcribe, summarize, and translate them</li>
-        <li>Your WhatsApp phone number, to send replies back to the correct chat</li>
-        <li>
-          The text and audio content of your voice notes, sent to our transcription and
-          language-processing provider (Groq) to generate results
-        </li>
-        <li>
-          Payment information when you subscribe to Gist Pro, collected and processed
-          directly by our payment gateway partner — Gist Tech does not store full card
-          numbers
-        </li>
+    <PolicyPage title="Privacy Policy">
+      <p className="text-sm text-stone-500 mb-8">Last updated: {new Date().toLocaleDateString()}</p>
+      
+      <h2 className="text-xl font-semibold text-stone-900 mt-10 mb-4">1. Introduction</h2>
+      <p className="mb-6">Welcome to GIST. We respect your privacy and are committed to protecting your personal data. This privacy policy will inform you as to how we look after your personal data when you use our voice intelligence services and tell you about your privacy rights.</p>
+      
+      <h2 className="text-xl font-semibold text-stone-900 mt-10 mb-4">2. Data We Collect</h2>
+      <p className="mb-6">As an AI processing service, we temporarily collect audio recordings you submit strictly for the purpose of generating transcripts and summaries. <strong>We do not use your personal audio data to train public AI models.</strong> We also collect basic account, billing, and usage information necessary to provide the service.</p>
+      
+      <h2 className="text-xl font-semibold text-stone-900 mt-10 mb-4">3. How We Use Your Data</h2>
+      <p className="mb-4">We use your data exclusively to:</p>
+      <ul className="list-disc pl-5 space-y-2 mb-6 text-stone-600">
+        <li>Provide, operate, and maintain our core transcription and summarization services.</li>
+        <li>Process subscription transactions via our billing provider.</li>
+        <li>Send you technical notices, updates, and security alerts.</li>
       </ul>
 
-      <h2>What we don&rsquo;t do</h2>
-      <ul>
-        <li>We don&rsquo;t sell or share your voice notes or phone number with advertisers</li>
-        <li>We don&rsquo;t use your voice notes to train any AI models</li>
-        <li>We don&rsquo;t read or process messages you haven&rsquo;t sent directly to Gist</li>
-      </ul>
+      <h2 className="text-xl font-semibold text-stone-900 mt-10 mb-4">4. Data Security</h2>
+      <p className="mb-6">We have put in place appropriate security measures to prevent your personal data from being accidentally lost, used, or accessed in an unauthorized way. Audio processing is handled securely, and transient files are routinely cleared from active processing environments.</p>
 
-      <h2>How long we keep data</h2>
-      <p>
-        Voice notes and transcripts are processed to generate your summary and are not
-        stored permanently by Gist Tech beyond what&rsquo;s needed to complete that
-        request.
-      </p>
-
-      <h2>Third parties</h2>
-      <p>
-        We use Groq for audio transcription and language processing, Meta&rsquo;s
-        WhatsApp Business Platform to send and receive messages, and a licensed
-        Pakistani payment gateway to process Gist Pro subscription payments. Each
-        handles data under their own privacy terms in addition to this policy.
-      </p>
-
-      <h2>Contact</h2>
-      <p>
-        Questions about this policy or your data can be sent to{" "}
-        <a href="mailto:lokism890@gmail.com">lokism890@gmail.com</a>.
-      </p>
+      <h2 className="text-xl font-semibold text-stone-900 mt-10 mb-4">5. Contact Us</h2>
+      <p className="mb-6">If you have any questions about this privacy policy or our privacy practices, please contact us via our designated support email found in the footer of our website.</p>
     </PolicyPage>
   );
 }
