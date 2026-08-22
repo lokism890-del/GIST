@@ -155,9 +155,9 @@ async function processAndReplyToVoiceNote(from: string, mediaId: string) {
   const audioBlob = await downloadWhatsAppMedia(mediaId);
   const gist = await summarizeAudio(Object.assign(audioBlob, { name: "voice.ogg" }));
 
-  const langLabel = languageName(gist.detectedLanguage);
-  const gistText = formatGistMessage(gist.summary, gist.keyPoints, langLabel);
-  const isEnglish = (gist.detectedLanguage ?? "").toLowerCase().startsWith("en");
+  const langLabel = languageName(gist.language);
+const gistText = formatGistMessage(gist.summary, gist.keyPoints ?? [], langLabel);
+  const isEnglish = (gist.language ?? "").toLowerCase().startsWith("en");
 
   const buttons = [{ id: `${TRANSCRIPT_PREFIX}${mediaId}`, title: "📄 Transcript" }];
   if (!isEnglish) {

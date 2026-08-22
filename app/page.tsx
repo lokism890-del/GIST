@@ -1,15 +1,15 @@
 "use client";
 
 import React, { useState, useRef, useEffect, ChangeEvent, DragEvent } from 'react';
+import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 
 interface SummarizeResult {
-  gist?: string;
+  summary?: string;
   keyPoints?: string | string[];
   actionItems?: string | string[];
-  suggestedReply?: string;
+  suggestedReply?: any;
   transcript?: string;
   language?: string;
-  translation?: string;
 }
 
 interface UserEntitlements {
@@ -18,13 +18,15 @@ interface UserEntitlements {
   usageLimit: number;
 }
 
-const PROCESSING_STAGES = [
-  "Recording complete",
-  "Uploading",
-  "Transcribing",
-  "Understanding",
-  "Preparing Gist"
-];
+const PROCESSING_STAGES = ["Recording complete", "Uploading", "Transcribing", "Understanding", "Preparing Intelligence"];
+
+const springTransition = { type: "spring" as const, stiffness: 350, damping: 26 };
+const snappyEase = [0.2, 0.8, 0.2, 1] as const;
+const buttonSpring = { type: "spring" as const, stiffness: 400, damping: 25 };
+const staggerContainer = { hidden: { opacity: 0 }, show: { opacity: 1, transition: { staggerChildren: 0.08, delayChildren: 0.05 } } };
+const fadeUp = { hidden: { opacity: 0, y: 24 }, show: { opacity: 1, y: 0, transition: { duration: 0.5, ease: snappyEase } } };
+const bgTextReveal = { hidden: { opacity: 0, y: 50, scale: 0.98 }, show: { opacity: 1, y: 0, scale: 1, transition: { duration: 0.8, ease: snappyEase } } };
+const fadeUpBlur = { hidden: { opacity: 0, y: 20, filter: "blur(6px)" }, show: { opacity: 1, y: 0, filter: "blur(0px)", transition: { duration: 0.5, ease: snappyEase } } };
 
 export default function Page() {
   const [isRecording, setIsRecording] = useState(false);
@@ -37,15 +39,11 @@ export default function Page() {
   const [results, setResults] = useState<SummarizeResult | null>(null);
   const [lastAudioData, setLastAudioData] = useState<Blob | File | null>(null);
   
-  // Translation States
-  const [isTranslating, setIsTranslating] = useState(false);
-  const [translationError, setTranslationError] = useState<string | null>(null);
+  const [activeTone, setActiveTone] = useState<string>('Professional');
+  const [isRegeneratingReply, setIsRegeneratingReply] = useState(false);
   
-  const [isDarkMode, setIsDarkMode] = useState(false);
-  const [mounted, setMounted] = useState(false);
-  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
-  
-  const [entitlements, setEntitlements] = useState<UserEntitlements | null>(null);
+  const [activeSection, setActiveSection] = useState('home');
+  const [entitlements, setEntitlements] = useState<UserEntitlements>({ tier: 'FREE', usageCount: 0, usageLimit: 5 });
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioChunksRef = useRef<Blob[]>([]);
@@ -55,91 +53,43 @@ export default function Page() {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const animationFrameRef = useRef<number | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
+  
+  const prefersReducedMotion = useReducedMotion();
 
   useEffect(() => {
     fetch('/api/user/entitlements')
-      .then(res => {
-        if (!res.ok) throw new Error('Failed to fetch entitlements');
-        return res.json();
-      })
-      .then(data => setEntitlements(data))
-      .catch(() => {
-        setEntitlements({ tier: 'FREE', usageCount: 0, usageLimit: 5 });
-      });
+      .then(res => res.ok ? res.json() : { tier: 'FREE', usageCount: 0, usageLimit: 5 })
+      .then(data => { if (data && typeof data.usageCount === 'number') setEntitlements(data); })
+      .catch(() => setEntitlements({ tier: 'FREE', usageCount: 0, usageLimit: 5 }));
   }, []);
 
   useEffect(() => {
-    setMounted(true);
-    const savedTheme = localStorage.getItem('theme');
-    
-    if (savedTheme === 'dark') {
-      setIsDarkMode(true);
-      document.documentElement.classList.add('dark');
-    } else {
-      setIsDarkMode(false);
-      document.documentElement.classList.remove('dark');
-      if (!savedTheme) localStorage.setItem('theme', 'light');
-    }
-  }, []);
-
-  const toggleTheme = () => {
-    setIsDarkMode((prev) => {
-      const next = !prev;
-      if (next) {
-        document.documentElement.classList.add('dark');
-        localStorage.setItem('theme', 'dark');
-      } else {
-        document.documentElement.classList.remove('dark');
-        localStorage.setItem('theme', 'light');
-      }
-      return next;
+    const sectionObserver = new IntersectionObserver((entries) => {
+      entries.forEach(entry => { if (entry.isIntersecting) setActiveSection(entry.target.id); });
+    }, { threshold: 0.3 });
+    ['home', 'features', 'faq', 'pricing'].forEach(id => {
+      const el = document.getElementById(id);
+      if (el) sectionObserver.observe(el);
     });
-  };
-
-  useEffect(() => {
-    const observer = new IntersectionObserver((entries) => {
-      entries.forEach(entry => {
-        if (entry.isIntersecting) {
-          entry.target.classList.add('opacity-100', 'translate-y-0');
-          entry.target.classList.remove('opacity-0', 'translate-y-8');
-          observer.unobserve(entry.target);
-        }
-      });
-    }, { threshold: 0.1, rootMargin: '0px 0px -50px 0px' });
-
-    document.querySelectorAll('.scroll-animate').forEach(el => observer.observe(el));
-    return () => observer.disconnect();
+    return () => sectionObserver.disconnect();
   }, [results]);
 
   useEffect(() => {
-    return () => stopRecordingCleanup();
-  }, []);
-
-  useEffect(() => {
-    if (!isProcessing) {
-      setProcessingStageIndex(0);
-      return;
-    }
-    const interval = setInterval(() => {
-      setProcessingStageIndex((prev) => (prev < PROCESSING_STAGES.length - 1 ? prev + 1 : prev));
-    }, 600); 
+    if (!isProcessing) { setProcessingStageIndex(0); return; }
+    const interval = setInterval(() => setProcessingStageIndex(prev => prev < PROCESSING_STAGES.length - 1 ? prev + 1 : prev), 450); 
     return () => clearInterval(interval);
   }, [isProcessing]);
 
   const startRecording = async () => {
-    if (entitlements?.tier === 'FREE' && entitlements.usageCount >= entitlements.usageLimit) {
-      setError("You have reached your monthly Free tier limit. Please upgrade to Pro to continue processing voice notes.");
+    if (entitlements.tier === 'FREE' && entitlements.usageCount >= entitlements.usageLimit) {
+      setError("Monthly Free tier limit reached (5/5). Please upgrade to Pro for unlimited processing.");
       return;
     }
-
-    setError(null);
-    setResults(null);
-    setTranslationError(null);
+    setError(null); setResults(null); setActiveTone('Professional');
     
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
-      
       const mediaRecorder = new MediaRecorder(stream);
       mediaRecorderRef.current = mediaRecorder;
       audioChunksRef.current = [];
@@ -147,698 +97,445 @@ export default function Page() {
       const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
       const audioContext = new AudioContextClass();
       audioContextRef.current = audioContext;
-      
       const analyser = audioContext.createAnalyser();
       analyser.fftSize = 256;
       analyserRef.current = analyser;
-      
       const source = audioContext.createMediaStreamSource(stream);
       source.connect(analyser);
-      
       const dataArray = new Uint8Array(analyser.frequencyBinCount);
       
       const updateVolume = () => {
         analyser.getByteFrequencyData(dataArray);
         const average = dataArray.reduce((acc, val) => acc + val, 0) / dataArray.length;
-        const level = 1 + (average / 255) * 0.5;
-        setAudioLevel(level);
+        setAudioLevel(1 + (average / 255) * 0.45);
         animationFrameRef.current = requestAnimationFrame(updateVolume);
       };
-      
       updateVolume();
 
-      mediaRecorder.ondataavailable = (event) => {
-        if (event.data.size > 0) audioChunksRef.current.push(event.data);
-      };
-
-      mediaRecorder.onstop = () => {
-        const audioBlob = new Blob(audioChunksRef.current, { type: 'audio/webm' });
-        processAudio(audioBlob);
-      };
+      mediaRecorder.ondataavailable = (e) => { if (e.data.size > 0) audioChunksRef.current.push(e.data); };
+      mediaRecorder.onstop = () => processAudio(new Blob(audioChunksRef.current, { type: 'audio/webm' }));
 
       mediaRecorder.start();
       setIsRecording(true);
       setRecordingTime(0);
-      
-      timerRef.current = setInterval(() => {
-        setRecordingTime((prev) => prev + 1);
-      }, 1000);
+      timerRef.current = setInterval(() => setRecordingTime(prev => prev + 1), 1000);
 
     } catch (err) {
-      console.error('Microphone access denied or error:', err);
-      setError('Microphone access is required to record. Please check your permissions.');
+      setError('Microphone access is required to record. Please check permissions.');
     }
   };
 
   const stopRecordingCleanup = () => {
     if (timerRef.current) clearInterval(timerRef.current);
     if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
-    if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
-      audioContextRef.current.close().catch(console.error);
-    }
+    if (audioContextRef.current && audioContextRef.current.state !== 'closed') audioContextRef.current.close().catch(console.error);
     if (streamRef.current) streamRef.current.getTracks().forEach(track => track.stop());
-    setAudioLevel(1);
-    setIsRecording(false);
+    setAudioLevel(1); setIsRecording(false);
   };
 
   const stopRecording = () => {
-    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') {
-      mediaRecorderRef.current.stop();
-    }
+    if (mediaRecorderRef.current && mediaRecorderRef.current.state !== 'inactive') mediaRecorderRef.current.stop();
     stopRecordingCleanup();
   };
 
   const processAudio = async (audioData: Blob | File) => {
+    if (entitlements.tier === 'FREE' && entitlements.usageCount >= entitlements.usageLimit) {
+      setError("Monthly Free limit reached (5/5). Upgrade to Pro to process this voice note.");
+      return;
+    }
+
     const isFile = 'name' in audioData;
-    
-    setLastAudioData(audioData);
-    setIsProcessing(true);
-    setProcessingStageIndex(isFile ? 1 : 0);
-    setError(null);
-    setTranslationError(null);
+    setLastAudioData(audioData); setIsProcessing(true); setProcessingStageIndex(isFile ? 1 : 0); setError(null);
     
     try {
       const formData = new FormData();
-      if (isFile) {
-        formData.append('audio', audioData);
-      } else {
-        formData.append('audio', audioData, 'recording.webm');
-      }
+      formData.append('audio', isFile ? audioData : new File([audioData], 'recording.webm'));
 
       const [response] = await Promise.all([
-        fetch('/api/summarize', {
-          method: 'POST',
-          body: formData,
-        }),
-        new Promise(resolve => setTimeout(resolve, 1500))
+        fetch('/api/summarize', { method: 'POST', body: formData }),
+        new Promise(resolve => setTimeout(resolve, 1000))
       ]);
 
       if (!response.ok) {
         const errorData = await response.json().catch(() => ({}));
-        throw new Error(errorData.message || `Processing failed (Status ${response.status})`);
+        throw new Error(errorData.message || errorData.error || `Processing failed (Status ${response.status})`);
       }
 
       const data: SummarizeResult = await response.json();
-      
       setProcessingStageIndex(PROCESSING_STAGES.length - 1);
-      
       setTimeout(() => {
-        setResults(data);
-        setIsProcessing(false);
-        if (entitlements && entitlements.tier === 'FREE') {
-          setEntitlements(prev => prev ? { ...prev, usageCount: prev.usageCount + 1 } : prev);
-        }
-      }, 300);
-
+        setResults(data); setIsProcessing(false);
+        if (entitlements.tier === 'FREE') setEntitlements(prev => ({ ...prev, usageCount: Math.min(prev.usageLimit, prev.usageCount + 1) }));
+      }, 250);
     } catch (err: any) {
-      console.error('Error processing audio:', err);
       setError(err.message || 'An error occurred while processing your audio.');
       setIsProcessing(false);
     }
   };
 
-  const handleTranslate = async () => {
-    if (!results?.transcript) return;
-    setIsTranslating(true);
-    setTranslationError(null);
-    
-    try {
-      const response = await fetch('/api/translate', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ 
-          text: results.transcript, 
-          sourceLanguage: results.language 
-        })
-      });
-
-      if (!response.ok) {
-        throw new Error('Failed to generate translation. Please try again.');
-      }
-
-      const data = await response.json();
-      setResults(prev => prev ? { ...prev, translation: data.translation } : prev);
-    } catch (err: any) {
-      setTranslationError(err.message || 'Translation failed.');
-    } finally {
-      setIsTranslating(false);
-    }
+  const handleChangeTone = (tone: string) => {
+    setActiveTone(tone); setIsRegeneratingReply(true);
+    setTimeout(() => setIsRegeneratingReply(false), 400);
   };
 
-  const handleDragOver = (e: DragEvent<HTMLButtonElement>) => {
-    e.preventDefault();
-    setIsDragging(true);
+  const handleCopyEverything = () => {
+    if (!results) return;
+    const currentReply = typeof results.suggestedReply === 'object' && results.suggestedReply !== null ? results.suggestedReply[activeTone.toLowerCase()] : results.suggestedReply;
+    const textToCopy = `GIST SUMMARY\n\n${results.summary || ''}\n\nKEY POINTS\n${Array.isArray(results.keyPoints) ? results.keyPoints.join('\n') : results.keyPoints || ''}\n\nACTION ITEMS\n${Array.isArray(results.actionItems) ? results.actionItems.join('\n') : results.actionItems || ''}\n\nSUGGESTED REPLY (${activeTone})\n${currentReply || ''}\n\nTRANSCRIPT\n${results.transcript || ''}`;
+    navigator.clipboard.writeText(textToCopy);
   };
 
-  const handleDragLeave = (e: DragEvent<HTMLButtonElement>) => {
-    e.preventDefault();
-    setIsDragging(false);
+  const handleDownloadTXT = () => {
+    if (!results) return;
+    const currentReply = typeof results.suggestedReply === 'object' && results.suggestedReply !== null ? results.suggestedReply[activeTone.toLowerCase()] : results.suggestedReply;
+    const textToCopy = `GIST SUMMARY\n\n${results.summary || ''}\n\nKEY POINTS\n${Array.isArray(results.keyPoints) ? results.keyPoints.join('\n') : results.keyPoints || ''}\n\nACTION ITEMS\n${Array.isArray(results.actionItems) ? results.actionItems.join('\n') : results.actionItems || ''}\n\nSUGGESTED REPLY (${activeTone})\n${currentReply || ''}\n\nTRANSCRIPT\n${results.transcript || ''}`;
+    const blob = new Blob([textToCopy], { type: 'text/plain' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = `Gist_Export_${new Date().toISOString().slice(0, 10)}.txt`;
+    a.click(); URL.revokeObjectURL(url);
   };
 
+  const handleDownloadCSV = () => {
+    if (!results) return;
+    const currentReply = typeof results.suggestedReply === 'object' && results.suggestedReply !== null ? results.suggestedReply[activeTone.toLowerCase()] : results.suggestedReply;
+    const escapeCSV = (str: string) => `"${String(str).replace(/"/g, '""')}"`;
+    const csvContent = [
+      ['Category', 'Content'],
+      ['Summary', escapeCSV(results.summary || '')],
+      ['Key Points', escapeCSV(Array.isArray(results.keyPoints) ? results.keyPoints.join('; ') : results.keyPoints || '')],
+      ['Action Items', escapeCSV(Array.isArray(results.actionItems) ? results.actionItems.join('; ') : results.actionItems || '')],
+      ['Suggested Reply', escapeCSV(currentReply || '')],
+      ['Transcript', escapeCSV(results.transcript || '')]
+    ].map(e => e.join(",")).join("\n");
+    const blob = new Blob([csvContent], { type: 'text/csv;charset=utf-8;' });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = url; a.download = `Gist_Data_${new Date().toISOString().slice(0, 10)}.csv`;
+    a.click(); URL.revokeObjectURL(url);
+  };
+
+  const handleDragOver = (e: DragEvent<HTMLButtonElement>) => { e.preventDefault(); setIsDragging(true); };
+  const handleDragLeave = (e: DragEvent<HTMLButtonElement>) => { e.preventDefault(); setIsDragging(false); };
   const handleDrop = (e: DragEvent<HTMLButtonElement>) => {
-    e.preventDefault();
-    setIsDragging(false);
-    const file = e.dataTransfer.files?.[0];
-    if (file) validateAndProcessFile(file);
+    e.preventDefault(); setIsDragging(false);
+    const file = e.dataTransfer.files?.[0]; if (file) validateAndProcessFile(file);
   };
 
   const handleFileUpload = (event: ChangeEvent<HTMLInputElement>) => {
-    const file = event.target.files?.[0];
-    if (file) validateAndProcessFile(file);
+    const file = event.target.files?.[0]; if (file) validateAndProcessFile(file);
     if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const validateAndProcessFile = (file: File) => {
-    if (entitlements?.tier === 'FREE' && entitlements.usageCount >= entitlements.usageLimit) {
-      setError("You have reached your monthly Free tier limit. Please upgrade to Pro to continue.");
-      return;
+    if (entitlements.tier === 'FREE' && entitlements.usageCount >= entitlements.usageLimit) {
+      setError("Monthly Free tier limit reached (5/5). Upgrade to Pro to continue uploading."); return;
     }
-    if (!file.type.startsWith('audio/')) {
-      setError('Please upload a valid audio file.');
-      return;
-    }
+    if (!file.type.startsWith('audio/')) { setError('Please upload a valid audio file.'); return; }
     processAudio(file);
   };
 
-  const formatTime = (seconds: number) => {
-    const m = Math.floor(seconds / 60).toString().padStart(2, '0');
-    const s = (seconds % 60).toString().padStart(2, '0');
-    return `${m}:${s}`;
-  };
+  const formatTime = (seconds: number) => `${Math.floor(seconds / 60).toString().padStart(2, '0')}:${(seconds % 60).toString().padStart(2, '0')}`;
 
-  const resetState = () => {
-    setResults(null);
-    setError(null);
-    setTranslationError(null);
-    setRecordingTime(0);
-    setLastAudioData(null);
-  };
+  const resetState = () => { setResults(null); setError(null); setRecordingTime(0); setLastAudioData(null); setActiveTone('Professional'); };
 
-  const scrollToTop = () => {
-    window.scrollTo({ top: 0, behavior: 'smooth' });
-    setIsMobileMenuOpen(false);
-  };
-
-  const closeMenu = () => setIsMobileMenuOpen(false);
-
-  // Check if translation UI is needed
-  const isNonEnglish = results?.language && !['english', 'en'].includes(results.language.toLowerCase());
+  const isNonEnglish = Boolean(results?.language && !['english', 'en'].includes(results.language.toLowerCase()));
+  const remainingFreeUses = Math.max(0, entitlements.usageLimit - entitlements.usageCount);
+  
+  const hasActionItems = Boolean(
+    results?.actionItems && Array.isArray(results.actionItems) && results.actionItems.length > 0 && 
+    !results.actionItems.join('').toLowerCase().includes('none') && !results.actionItems.join('').toLowerCase().includes('no action')
+  );
 
   return (
-    <div className="min-h-screen font-sans flex flex-col overflow-x-hidden transition-colors duration-300 relative">
+    <div className="min-h-screen font-sans flex flex-col overflow-x-hidden relative bg-[#0B1220] text-[#F1F5F9] selection:bg-[#1E293B]/50">
       
-      {/* HEADER */}
-      <header className="w-full px-5 py-4 flex items-center justify-between border-b border-stone-200 bg-white/80 backdrop-blur-md sticky top-0 z-50 fade-in d-header transition-colors duration-300">
-        <div className="flex-1 flex items-center justify-start">
-          <button onClick={scrollToTop} className="flex flex-col text-left hover:opacity-70 transition-opacity duration-300 active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 rounded">
-            <h1 className="text-2xl font-bold tracking-tight text-stone-900 leading-none d-text-primary">GIST</h1>
-            <span className="text-xs font-bold tracking-widest text-stone-400 uppercase mt-1 d-text-secondary">
-              Voice Intelligence
-            </span>
-          </button>
-        </div>
-        
-        <nav className="hidden md:flex flex-1 items-center justify-center gap-8 text-sm font-medium text-stone-500 d-text-secondary">
-          <a href="#features" className="hover:text-stone-900 transition-colors duration-200 d-hover-text">Features</a>
-          <a href="#faq" className="hover:text-stone-900 transition-colors duration-200 d-hover-text">FAQ</a>
-          <a href="#pricing" className="hover:text-stone-900 transition-colors duration-200 d-hover-text">Pricing</a>
-        </nav>
-        
-        <div className="flex-1 flex items-center justify-end gap-5">
-          <button
-            onClick={toggleTheme}
-            className="relative p-2 rounded-full text-stone-400 hover:text-stone-600 hover:bg-stone-100 d-text-secondary d-hover transition-colors active:scale-95 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 w-10 h-10 flex items-center justify-center overflow-hidden"
-            aria-label={isDarkMode ? "Switch to light mode" : "Switch to dark mode"}
-          >
-            {mounted && (
-              <>
-                <svg className={`absolute w-5 h-5 transition-all duration-300 ease-in-out ${isDarkMode ? 'opacity-0 -rotate-90 scale-50' : 'opacity-100 rotate-0 scale-100'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M20.354 15.354A9 9 0 018.646 3.646 9.003 9.003 0 0012 21a9.003 9.003 0 008.354-5.646z" />
-                </svg>
-                <svg className={`absolute w-5 h-5 transition-all duration-300 ease-in-out ${isDarkMode ? 'opacity-100 rotate-0 scale-100' : 'opacity-0 rotate-90 scale-50'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 3v1m0 16v1m9-9h-1M4 12H3m15.364 6.364l-.707-.707M6.343 6.343l-.707-.707m12.728 0l-.707.707M6.343 17.657l-.707.707M16 12a4 4 0 11-8 0 4 4 0 018 0z" />
-                </svg>
-              </>
-            )}
-          </button>
+      {/* BACKGROUND */}
+      <div className="fixed inset-0 z-[-1] overflow-hidden pointer-events-none bg-[#0B1220]">
+        <motion.div animate={prefersReducedMotion ? {} : { x: ['-5%', '15%', '-5%'], y: ['-5%', '15%', '-5%'], scale: [1, 1.1, 1] }} transition={{ duration: 18, repeat: Infinity, ease: 'linear' }} className="absolute top-[-10%] left-[-10%] w-[80vw] h-[80vw] rounded-full bg-[#0F172A] opacity-60 blur-[130px]" />
+        <motion.div animate={prefersReducedMotion ? {} : { x: ['10%', '-20%', '10%'], y: ['10%', '25%', '10%'], scale: [1, 1.2, 1] }} transition={{ duration: 22, repeat: Infinity, ease: 'linear' }} className="absolute top-[0%] right-[-10%] w-[60vw] h-[60vw] rounded-full bg-[#1E293B] opacity-30 blur-[120px]" />
+        <motion.div animate={prefersReducedMotion ? {} : { x: ['-20%', '20%', '-20%'], y: ['20%', '-10%', '20%'], scale: [1, 1.15, 1] }} transition={{ duration: 20, repeat: Infinity, ease: 'linear' }} className="absolute bottom-[-10%] left-[10%] w-[70vw] h-[70vw] rounded-full bg-[#0F172A] opacity-50 blur-[130px]" />
+      </div>
 
-          <div className="hidden lg:flex flex-col items-end">
-            <span className="text-xs font-semibold text-stone-700 d-text-primary">
-              {entitlements?.tier === 'PRO' ? 'Pro Plan' : 'Free Tier'}
-            </span>
-            {entitlements?.tier !== 'PRO' && (
-              <span className="text-xs text-stone-400 d-text-secondary">
-                {entitlements ? `${entitlements.usageCount}/${entitlements.usageLimit} uses left` : '...'}
-              </span>
-            )}
+      {/* PERFECTED HEADER */}
+      <motion.header initial={{ opacity: 0, y: -15 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.6, ease: snappyEase }} className="fixed top-0 left-0 w-full z-50 bg-[#0B1220]/90 backdrop-blur-xl border-b border-white/5 pt-4 pb-4">
+        <div className="max-w-6xl mx-auto px-6 sm:px-8 lg:px-10 flex items-center justify-between">
+          
+          <div className="flex items-center justify-start min-w-200px">
+            <motion.a href="#home" className="flex items-center gap-4 group" whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} transition={buttonSpring}>
+              <div className="w-9 h-9 rounded-xl bg-[#F1F5F9] flex items-center justify-center transition-all duration-300 shadow-[0_0_15px_rgba(241,245,249,0.08)] group-hover:shadow-[0_0_20px_rgba(241,245,249,0.15)]"><svg className="w-5 h-5 text-[#0B1220]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M4 10v4m4-8v12m4-10v8m4-12v16m4-10v4" /></svg></div>
+              <span className="text-[22px] font-black tracking-wide text-[#F1F5F9]">GIST</span>
+            </motion.a>
           </div>
           
-          <a href="/api/checkout" className="hidden sm:flex px-5 py-2 text-sm font-medium text-white bg-stone-900 rounded-full hover:bg-stone-800 active:scale-95 transition-all duration-200 shadow-sm d-accent-bg focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 focus-visible:ring-offset-2">
-            Upgrade to Pro
-          </a>
-
-          <button 
-            className="md:hidden p-2 rounded-lg text-stone-500 hover:bg-stone-100 d-text-secondary d-hover transition-colors focus-visible:outline-none"
-            onClick={() => setIsMobileMenuOpen(!isMobileMenuOpen)}
-            aria-label="Menu"
-          >
-            {isMobileMenuOpen ? (
-               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" /></svg>
-            ) : (
-               <svg className="w-6 h-6" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h16" /></svg>
-            )}
-          </button>
-        </div>
-      </header>
-
-      {/* Mobile Menu */}
-      {isMobileMenuOpen && (
-        <div className="md:hidden w-full bg-white border-b border-stone-200 d-header px-6 py-5 flex flex-col gap-5 fade-in z-40 absolute top-73px">
-          <nav className="flex flex-col gap-4 text-base font-medium text-stone-600 d-text-primary">
-            <a href="#features" onClick={closeMenu} className="hover:text-stone-900 d-hover-text">Features</a>
-            <a href="#faq" onClick={closeMenu} className="hover:text-stone-900 d-hover-text">FAQ</a>
-            <a href="#pricing" onClick={closeMenu} className="hover:text-stone-900 d-hover-text">Pricing</a>
+          <nav className="hidden md:flex items-center justify-center gap-10 text-[11px] font-bold uppercase tracking-[0.15em]">
+            {['home', 'features', 'faq', 'pricing'].map((id) => <a key={id} href={`#${id}`} className={`transition-colors duration-200 ${activeSection === id ? 'text-[#F1F5F9]' : 'text-[#64748B] hover:text-[#F1F5F9]'}`}>{id}</a>)}
           </nav>
-          <div className="pt-4 border-t border-stone-100 d-border flex flex-col gap-4">
-            <div className="flex items-center justify-between">
-              <span className="text-sm font-semibold text-stone-700 d-text-primary">
-                {entitlements?.tier === 'PRO' ? 'Pro Plan' : 'Free Tier'}
-              </span>
-              {entitlements?.tier !== 'PRO' && (
-                <span className="text-sm text-stone-500 d-text-secondary">
-                  {entitlements ? `${entitlements.usageCount}/${entitlements.usageLimit} uses left` : '...'}
-                </span>
-              )}
-            </div>
-            <a href="/api/checkout" className="w-full text-center px-5 py-3 text-sm font-medium text-white bg-stone-900 d-accent-bg rounded-xl active:scale-95 transition-all shadow-sm">
-              Upgrade to Pro
-            </a>
-          </div>
-        </div>
-      )}
-
-      {/* DASHBOARD HERO */}
-      <main className="flex-1 w-full max-w-4xl mx-auto p-5 sm:p-8 flex flex-col items-center justify-center transition-all duration-500 min-h-[80vh]">
-        
-        {error && !isProcessing && !lastAudioData && (
-          <div className="w-full max-w-md mb-8 p-4 bg-red-50 border border-red-200 text-red-800 text-sm rounded-xl flex items-center justify-between fade-in shadow-sm d-card d-border d-text-primary">
-            <span>{error}</span>
-            <button onClick={() => setError(null)} className="p-2 text-red-500 hover:text-red-700 font-bold ml-2 active:scale-95 outline-none">&times;</button>
-          </div>
-        )}
-
-        {!isProcessing && !results && !error && (
-          <div className="flex flex-col items-center justify-center w-full max-w-md mx-auto space-y-10 fade-in">
-            <div className="text-center space-y-2 h-16">
-              <h2 className="text-3xl sm:text-4xl font-bold tracking-tight text-stone-900 d-text-primary">
-                {isRecording ? formatTime(recordingTime) : "Ready to listen"}
-              </h2>
-              <p className="text-stone-500 text-sm font-medium d-text-secondary">
-                {isRecording ? "Listening... Tap to stop" : "Tap the microphone to start recording."}
-              </p>
-            </div>
-
-            <div className="relative flex items-center justify-center w-48 h-48 sm:w-56 sm:h-56 my-4">
-              {isRecording && (
-                <div 
-                  className="absolute inset-0 bg-red-100 rounded-full transition-transform duration-75 ease-out"
-                  style={{ transform: `scale(${audioLevel})` }}
-                  aria-hidden="true"
-                />
-              )}
-              
-              <button 
-                onClick={isRecording ? stopRecording : startRecording}
-                aria-label={isRecording ? "Stop recording" : "Start recording"}
-                className={`relative z-10 flex items-center justify-center w-36 h-36 sm:w-40 sm:h-40 rounded-full transition-all duration-300 ease-out shadow-sm active:scale-95 focus-visible:outline-none focus-visible:ring-4 focus-visible:ring-indigo-100 
-                  ${isRecording ? 'mic-recording' : 'bg-white text-stone-700 hover:shadow-xl hover:scale-105 hover:text-stone-900 border border-stone-200 d-card d-border d-text-primary d-hover'}`}
-              >
-                {!isRecording ? (
-                  <svg className="w-10 h-10 sm:w-12 sm:h-12 transition-transform duration-300" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" />
-                  </svg>
-                ) : (
-                  <svg className="w-12 h-12" fill="currentColor" viewBox="0 0 24 24">
-                    <rect x="6" y="6" width="12" height="12" rx="2.5" />
-                  </svg>
-                )}
-              </button>
-            </div>
-
-            {!isRecording && (
-              <div className="w-full">
-                <input type="file" accept="audio/*" ref={fileInputRef} onChange={handleFileUpload} className="hidden" />
-                <button 
-                  onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop} onClick={() => fileInputRef.current?.click()}
-                  className={`w-full p-5 border-2 border-dashed rounded-2xl flex flex-col items-center justify-center gap-3 transition-all duration-300 cursor-pointer group focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500
-                    ${isDragging ? 'border-indigo-400 bg-indigo-50/50' : 'border-stone-200 bg-white hover:border-stone-300 hover:bg-stone-50 active:scale-95 shadow-sm hover:shadow-md d-card d-border d-hover'}`}
-                >
-                  <svg className={`w-6 h-6 transition-colors duration-300 ${isDragging ? 'text-indigo-600 animate-bounce' : 'text-stone-400 group-hover:text-stone-600 d-text-secondary'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />
-                  </svg>
-                  <span className="text-sm font-medium text-stone-500 group-hover:text-stone-700 transition-colors d-text-secondary">
-                    Click to upload or drag audio here
-                  </span>
-                </button>
+          
+          <div className="flex items-center justify-end gap-5 min-w-50">
+            {entitlements.tier === 'PRO' ? (
+              <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className="relative flex items-center gap-2.5 px-4 py-1.5 rounded-full bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 text-[11px] font-bold uppercase tracking-widest shadow-sm">
+                <span className="w-2 h-2 rounded-full bg-emerald-400 animate-pulse shadow-[0_0_8px_rgba(52,211,153,0.8)]" /><span>Pro Active</span>
+              </motion.div>
+            ) : (
+              <div className="flex items-center gap-4">
+                <div className="hidden sm:flex items-center gap-2 px-3 py-1.5 rounded-full bg-white/5 border border-white/10 text-[11px] font-medium text-[#94A3B8] shadow-inner">
+                  <span className={`w-1.5 h-1.5 rounded-full ${remainingFreeUses > 0 ? 'bg-emerald-400' : 'bg-rose-400'}`} /> <span>Trial: <strong className="text-[#F1F5F9] font-bold">{remainingFreeUses}/5</strong></span>
+                </div>
+                <form action="/api/checkout" method="POST">
+                  <input type="hidden" name="plan" value="pro" />
+                  <motion.button whileHover={{ scale: 1.05 }} whileTap={{ scale: 0.95 }} transition={buttonSpring} type="submit" className="px-5 py-2 rounded-full bg-[#F1F5F9] text-[#0B1220] text-[11px] font-bold uppercase tracking-widest shadow-[0_4px_14px_rgba(241,245,249,0.15)] hover:shadow-[0_6px_20px_rgba(241,245,249,0.25)] transition-all">Upgrade</motion.button>
+                </form>
               </div>
             )}
           </div>
+
+        </div>
+      </motion.header>
+
+      <main id="home" className="relative flex-1 w-full max-w-4xl mx-auto pt-36 pb-24 px-5 sm:px-8 flex flex-col items-center justify-center min-h-screen">
+        <AnimatePresence>
+          {error && !isProcessing && (
+            <motion.div initial={{ opacity: 0, y: -10, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: -10, scale: 0.98 }} className="absolute top-28 w-full max-w-md p-4 bg-red-950/40 backdrop-blur-md border border-red-500/40 text-[#F1F5F9] text-xs rounded-xl flex items-center justify-between shadow-lg z-20">
+              <div className="flex items-center gap-2.5"><svg className="w-4 h-4 text-rose-400 shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg><span>{error}</span></div>
+              <button onClick={() => setError(null)} className="p-1 hover:opacity-70 transition-opacity ml-2 outline-none text-base">&times;</button>
+            </motion.div>
+          )}
+        </AnimatePresence>
+
+        {!isProcessing && !results && (
+          <motion.div variants={staggerContainer} initial="hidden" animate="show" className="flex flex-col items-center justify-center w-full max-w-md mx-auto gap-12 sm:gap-14">
+            <div className="text-center space-y-3">
+              <motion.h2 variants={fadeUpBlur} className="text-4xl sm:text-5xl font-bold tracking-tight text-[#F1F5F9]">{isRecording ? formatTime(recordingTime) : "Ready to listen"}</motion.h2>
+              <motion.p variants={fadeUpBlur} className="text-[#94A3B8] text-sm font-medium">{isRecording ? "Listening... Tap mic to process" : "Tap the microphone to start recording."}</motion.p>
+            </div>
+            <motion.div variants={fadeUpBlur} className="relative flex items-center justify-center w-48 h-48 sm:w-56 sm:h-56">
+              <motion.div animate={prefersReducedMotion ? {} : { scale: [1, 1.06, 1], opacity: [0.25, 0.45, 0.25] }} transition={{ duration: 4, repeat: Infinity, ease: "easeInOut" }} className="absolute inset-0 bg-[#1E293B] rounded-full blur-3xl pointer-events-none" />
+              {isRecording && <div className="absolute inset-0 bg-red-500/20 rounded-full transition-transform duration-75 ease-out" style={{ transform: `scale(${audioLevel})` }} aria-hidden="true" />}
+              <motion.button whileHover={isRecording ? {} : { scale: 1.05, y: -3, boxShadow: "0px 15px 35px rgba(15,23,42,0.6)" }} whileTap={{ scale: 0.95 }} transition={buttonSpring} onClick={isRecording ? stopRecording : startRecording} aria-label={isRecording ? "Stop recording" : "Start recording"} className={`relative z-10 flex items-center justify-center w-36 h-36 sm:w-40 sm:h-40 rounded-full transition-colors duration-200 focus:outline-none focus-visible:ring-4 focus-visible:ring-[#1E293B] ${isRecording ? 'bg-rose-500 text-[#F1F5F9] shadow-lg' : 'bg-[#0F172A] text-[#F1F5F9] border border-white/10 shadow-xl'}`}>
+                {!isRecording ? <svg className="w-10 h-10 sm:w-12 sm:h-12" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M19 11a7 7 0 01-7 7m0 0a7 7 0 01-7-7m7 7v4m0 0H8m4 0h4m-4-8a3 3 0 01-3-3V5a3 3 0 116 0v6a3 3 0 01-3 3z" /></svg> : <svg className="w-12 h-12 animate-pulse" fill="currentColor" viewBox="0 0 24 24"><rect x="6" y="6" width="12" height="12" rx="2.5" /></svg>}
+              </motion.button>
+            </motion.div>
+            {!isRecording && (
+              <motion.div variants={fadeUpBlur} className="w-full">
+                <input type="file" accept="audio/*" ref={fileInputRef} onChange={handleFileUpload} className="hidden" />
+                <motion.button whileHover={{ y: -3, scale: 1.01 }} whileTap={{ scale: 0.98 }} transition={buttonSpring} onDragOver={handleDragOver} onDragLeave={handleDragLeave} onDrop={handleDrop} onClick={() => fileInputRef.current?.click()} className={`w-full p-5 rounded-2xl flex flex-col items-center justify-center gap-2.5 transition-colors duration-200 cursor-pointer group focus:outline-none border border-dashed hover:shadow-lg ${isDragging ? 'border-[#94A3B8] bg-[#0F172A]' : 'border-white/10 bg-[#0F172A]/70 backdrop-blur-md hover:border-white/20'}`}>
+                  <motion.svg animate={isDragging ? { y: -4 } : { y: 0 }} transition={buttonSpring} className={`w-5 h-5 transition-colors duration-200 ${isDragging ? 'text-[#F1F5F9]' : 'text-[#94A3B8] group-hover:text-[#F1F5F9]'}`} fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" /></motion.svg>
+                  <span className="text-xs font-medium text-[#94A3B8] group-hover:text-[#F1F5F9] transition-colors">Click to upload or drag audio here</span>
+                </motion.button>
+              </motion.div>
+            )}
+          </motion.div>
         )}
 
         {isProcessing && (
-          <div className="w-full flex flex-col items-center justify-center fade-in">
+          <motion.div initial={{ opacity: 0, y: 20 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.5, ease: snappyEase }} className="w-full flex flex-col items-center justify-center">
             <div className="w-full max-w-sm mb-12 flex flex-col space-y-6">
-              <div className="flex items-center justify-center gap-3 mb-2">
-                <MiniWaveform />
-                <h2 className="text-xl font-semibold text-stone-900 d-text-primary">Processing audio...</h2>
-              </div>
-              <div className="flex flex-col gap-4 pl-6">
+              <div className="flex items-center justify-center gap-3 mb-2"><MiniWaveform /><h2 className="text-lg font-semibold text-[#F1F5F9]">Processing audio</h2></div>
+              <div className="flex flex-col gap-4 pl-8 relative">
+                <div className="absolute left-10 top-2 bottom-2 w-px bg-white/10 -z-10" />
                 {PROCESSING_STAGES.map((stage, idx) => {
-                  const isUploadAndFirstStage = stage === "Recording complete" && ('name' in (lastAudioData || {}));
-                  if (isUploadAndFirstStage) return null;
+                  if (stage === "Recording complete" && ('name' in (lastAudioData || {}))) return null;
                   return <ProcessingStep key={stage} label={stage} isActive={idx === processingStageIndex} isDone={idx < processingStageIndex} />;
                 })}
               </div>
             </div>
-            <div className="w-full max-w-4xl" aria-hidden="true">
-              <div className="grid gap-6 grid-cols-1 md:grid-cols-2">
-                <SkeletonCard /><SkeletonCard /><SkeletonCard /><SkeletonCard />
-              </div>
-            </div>
-          </div>
-        )}
-
-        {error && lastAudioData && !isProcessing && (
-          <div className="flex flex-col items-center justify-center w-full max-w-md mx-auto space-y-8 fade-in">
-            <div className="w-16 h-16 rounded-full bg-red-50 flex items-center justify-center border border-red-100 shadow-sm d-card d-border">
-              <svg className="w-8 h-8 text-red-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 9v2m0 4h.01m-6.938 4h13.856c1.54 0 2.502-1.667 1.732-3L13.732 4c-.77-1.333-2.694-1.333-3.464 0L3.34 16c-.77 1.333.192 3 1.732 3z" /></svg>
-            </div>
-            <div className="text-center space-y-2">
-              <h2 className="text-xl font-semibold text-stone-900 d-text-primary">Analysis Failed</h2>
-              <p className="text-sm text-stone-500 d-text-secondary px-4">{error}</p>
-            </div>
-            <div className="flex gap-4">
-              <button onClick={resetState} className="px-6 py-2.5 text-sm font-medium text-stone-700 bg-white border border-stone-200 rounded-full hover:bg-stone-50 active:scale-95 shadow-sm d-card d-border d-text-primary d-hover">Cancel</button>
-              <button onClick={() => processAudio(lastAudioData)} className="px-6 py-2.5 text-sm font-medium text-white bg-stone-900 rounded-full hover:bg-stone-800 active:scale-95 shadow-sm d-accent-bg">Try Again</button>
-            </div>
-          </div>
+          </motion.div>
         )}
 
         {results && !isProcessing && (
-          <div className="w-full" aria-live="polite">
+          <motion.div variants={staggerContainer} initial="hidden" animate="show" className="w-full max-w-4xl mx-auto" aria-live="polite">
             
-            <div className="flex flex-col sm:flex-row sm:justify-between sm:items-end gap-5 mb-8 pb-6 border-b border-stone-200 d-border fade-in-up">
+            <motion.div variants={fadeUp} className="flex flex-col sm:flex-row sm:justify-between sm:items-end gap-5 mb-6 pb-5 border-b border-white/10">
               <div>
-                <h2 className="text-3xl font-bold tracking-tight text-stone-900 d-text-primary flex items-center gap-3">
-                  Analysis Complete
-                </h2>
-                <p className="text-sm text-stone-500 d-text-secondary mt-2">Review your transcription and insights below.</p>
+                <h2 className="text-3xl font-bold tracking-tight text-[#F1F5F9] mb-2">Analysis Complete</h2>
+                <p className="text-xs text-[#94A3B8]">Review your transcription and intelligence summary below.</p>
               </div>
-              <button onClick={resetState} className="w-full sm:w-auto px-6 py-2.5 text-sm font-medium text-white bg-stone-900 rounded-full hover:bg-stone-800 active:scale-95 shadow-md flex items-center justify-center gap-2 d-accent-bg">
-                <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 4v16m8-8H4" /></svg>
-                New Voice Note
-              </button>
-            </div>
+              <motion.button whileHover={{ scale: 1.04, y: -2 }} whileTap={{ scale: 0.96 }} transition={buttonSpring} onClick={resetState} className="w-full sm:w-auto px-5 py-2 text-xs font-bold text-[#0B1220] bg-[#F1F5F9] rounded-full shadow-[0_0_15px_rgba(241,245,249,0.15)] flex items-center justify-center gap-2">
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 4v16m8-8H4" /></svg> New Voice Note
+              </motion.button>
+            </motion.div>
 
-            <div className="grid gap-6 grid-cols-1 md:grid-cols-2">
-              {results.gist && (
-                <div className="fade-in-up opacity-0 md:col-span-2" style={{ animationDelay: '100ms' }}>
-                  <ResultCard title="The Gist" content={results.gist} variant="summary" isPrimary />
-                </div>
-              )}
-              
-              {entitlements?.tier === 'PRO' ? (
+            {results.summary && (
+              <motion.div variants={fadeUp} className="mb-4">
+                <ResultCard title="The Gist" content={results.summary} variant="summary" isPrimary showTranslate={isNonEnglish && entitlements.tier === 'PRO'} />
+              </motion.div>
+            )}
+
+            {results.transcript && (
+              <motion.div variants={fadeUp} className="mb-8 relative">
+                {results.language && (
+                  <div className="mb-3 inline-flex items-center px-3 py-1 rounded-full bg-[#0F172A] border border-white/10 text-[#F1F5F9] text-[11px] font-medium shadow-sm">
+                    Detected Language: <span className="ml-1 capitalize text-[#F1F5F9] font-bold">{results.language}</span>
+                    <span className="ml-2 text-[#94A3B8] font-normal">· Detected automatically</span>
+                  </div>
+                )}
+                <ResultCard title="Full Transcript" content={results.transcript} variant="transcript" fullWidth scrollable showTranslate={isNonEnglish && entitlements.tier === 'PRO'} />
+              </motion.div>
+            )}
+
+            <div className="grid gap-4 grid-cols-1 md:grid-cols-2 mb-6">
+              {entitlements.tier === 'PRO' ? (
                 <>
-                  {results.keyPoints && (
-                    <div className="fade-in-up opacity-0" style={{ animationDelay: '200ms' }}>
-                      <ResultCard title="Key Points" content={results.keyPoints} variant="keyPoints" />
-                    </div>
+                  {results.keyPoints && results.keyPoints.length > 0 && (
+                    <motion.div variants={fadeUp}><ResultCard title="Key Points" content={results.keyPoints} variant="keyPoints" showTranslate={isNonEnglish} /></motion.div>
                   )}
-                  {results.actionItems && (
-                    <div className="fade-in-up opacity-0" style={{ animationDelay: '300ms' }}>
-                      <ResultCard title="Action Items" content={results.actionItems} variant="actionItems" />
-                    </div>
+                  {hasActionItems && (
+                    <motion.div variants={fadeUp}><ResultCard title="Action Items" content={results.actionItems} variant="actionItems" showTranslate={isNonEnglish} /></motion.div>
                   )}
                   {results.suggestedReply && (
-                    <div className="fade-in-up opacity-0" style={{ animationDelay: '400ms' }}>
-                      <ResultCard title="Suggested Reply" content={results.suggestedReply} variant="reply" />
-                    </div>
+                    <motion.div variants={fadeUp} className={`${hasActionItems ? 'md:col-span-2' : ''}`}>
+                      <ResultCard title="Smart Reply Generator" content={results.suggestedReply} variant="reply" fullWidth={hasActionItems} activeTone={activeTone} onChangeTone={handleChangeTone} isRegenerating={isRegeneratingReply} showTranslate={isNonEnglish} />
+                    </motion.div>
                   )}
                 </>
               ) : (
-                <>
-                  <div className="fade-in-up opacity-0" style={{ animationDelay: '200ms' }}>
-                    <LockedProCard title="Key Points" desc="Unlock detailed bullet points." />
-                  </div>
-                  <div className="fade-in-up opacity-0" style={{ animationDelay: '300ms' }}>
-                    <LockedProCard title="Action Items" desc="Unlock automatic task extraction." />
-                  </div>
-                  <div className="fade-in-up opacity-0" style={{ animationDelay: '400ms' }}>
-                    <LockedProCard title="Suggested Reply" desc="Unlock AI-generated smart replies." />
-                  </div>
-                </>
+                <motion.div variants={fadeUp} className="md:col-span-2 relative border border-white/5 rounded-3xl overflow-hidden bg-[#0F172A]/20">
+                   <div className="absolute inset-0 z-10 backdrop-blur-[6px] bg-[#0B1220]/75 flex flex-col items-center justify-center text-center p-8">
+                      <div className="w-12 h-12 bg-emerald-500/10 text-emerald-400 rounded-full flex items-center justify-center mb-5 border border-emerald-500/20 shadow-lg">
+                         <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
+                      </div>
+                      <h4 className="text-xl font-bold text-white mb-2">Unlock Advanced Intelligence</h4>
+                      <p className="text-sm text-[#94A3B8] max-w-md mb-6">Free tier includes your Gist and Transcript. Upgrade to Pro to unlock Key Points, Action Items, Smart Replies, and Translations.</p>
+                      <form action="/api/checkout" method="POST">
+                        <input type="hidden" name="plan" value="pro" />
+                        <button type="submit" className="px-6 py-2.5 bg-white text-black text-xs font-bold rounded-full shadow-[0_0_20px_rgba(255,255,255,0.2)] hover:scale-105 transition-transform">Upgrade to Pro</button>
+                      </form>
+                   </div>
+                   <div className="grid md:grid-cols-2 gap-4 opacity-30 pointer-events-none select-none blur-[2px] p-4">
+                      <MockResultCard title="Key Points" /><MockResultCard title="Action Items" />
+                      <div className="md:col-span-2"><MockResultCard title="Smart Reply Generator" /></div>
+                   </div>
+                </motion.div>
               )}
             </div>
 
-            {/* Transcription with Language Badge */}
-            {results.transcript && (
-              <div className="mt-8 fade-in-up opacity-0 relative" style={{ animationDelay: '500ms' }}>
-                {results.language && (
-                  <div className="mb-4 inline-flex items-center px-3 py-1 rounded-full bg-stone-200 text-stone-700 text-xs font-semibold shadow-sm d-card d-border d-text-primary">
-                    Detected Language: <span className="ml-1 capitalize text-indigo-600 d-accent">{results.language}</span>
-                  </div>
-                )}
-                <ResultCard title="Full Transcript" content={results.transcript} variant="transcript" fullWidth scrollable />
-              </div>
+            {entitlements.tier === 'PRO' && (
+              <motion.div variants={fadeUp} className="flex flex-col md:flex-row gap-4 items-center justify-between p-4 bg-[#0F172A]/70 backdrop-blur-md border border-white/5 rounded-2xl shadow-sm">
+                 <div className="flex items-center gap-3 text-xs text-[#94A3B8] font-medium"><svg className="w-4 h-4 text-[#F1F5F9]" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg> Export Intelligence</div>
+                 <div className="flex flex-wrap items-center gap-3">
+                   <button onClick={handleCopyEverything} className="px-4 py-1.5 border border-white/10 hover:bg-white/5 text-[#F1F5F9] text-xs font-medium rounded-full transition-colors">Copy Everything</button>
+                   <button onClick={handleDownloadTXT} className="px-4 py-1.5 border border-white/10 hover:bg-white/5 text-[#F1F5F9] text-xs font-medium rounded-full transition-colors">Download .TXT</button>
+                   <button onClick={handleDownloadCSV} className="px-4 py-1.5 bg-[#F1F5F9] text-[#0B1220] hover:opacity-90 text-xs font-bold rounded-full transition-colors shadow-sm">Download .CSV</button>
+                 </div>
+              </motion.div>
             )}
 
-            {/* Pro Translation Feature */}
-            {isNonEnglish && (
-              <div className="mt-6 fade-in-up opacity-0" style={{ animationDelay: '600ms' }}>
-                {entitlements?.tier === 'PRO' ? (
-                  results.translation ? (
-                    <ResultCard title="English Translation" content={results.translation} variant="transcript" fullWidth scrollable />
-                  ) : (
-                    <div className="p-6 border rounded-2xl bg-white border-stone-200 shadow-sm flex flex-col items-center justify-center min-h-120px d-card d-border">
-                      {isTranslating ? (
-                        <div className="flex items-center gap-3 text-stone-500 d-text-primary">
-                          <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24">
-                            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3"></circle>
-                            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-                          </svg>
-                          Translating to English...
-                        </div>
-                      ) : (
-                        <>
-                          <button onClick={handleTranslate} className="px-6 py-2.5 bg-stone-900 text-stone-50 rounded-full text-sm font-medium hover:scale-105 transition-transform active:scale-95 shadow-sm d-accent-bg">
-                            Translate to English
-                          </button>
-                          {translationError && <p className="text-red-500 text-xs mt-3">{translationError}</p>}
-                        </>
-                      )}
-                    </div>
-                  )
-                ) : (
-                  <LockedProCard title="English Translation" desc="Unlock automatic English translations for foreign language voice notes." />
-                )}
-              </div>
-            )}
-
-          </div>
+          </motion.div>
         )}
       </main>
 
-      {/* FEATURES SECTION */}
-      <section id="features" className="scroll-animate opacity-0 translate-y-8 transition-all duration-700 ease-out w-full max-w-5xl mx-auto px-5 sm:px-8 py-20 border-t border-stone-200 d-border">
-        <div className="text-center max-w-2xl mx-auto mb-16">
-          <h2 className="text-3xl font-bold tracking-tight text-stone-900 d-text-primary">Everything you need to understand voice</h2>
-          <p className="text-base text-stone-500 d-text-secondary mt-4">GIST transforms your scattered audio thoughts into structured, actionable text instantly.</p>
-        </div>
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6">
-          <FeatureCard title="The Gist" desc="Instantly get the core message of any voice note without listening to the whole thing." icon={<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />} />
-          <FeatureCard title="Action Items" desc="Automatically extract to-dos and follow-ups so nothing slips through the cracks." icon={<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />} />
-          <FeatureCard title="AI Suggested Replies" desc="Generate professional, context-aware replies ready to be sent to your team or clients." icon={<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />} />
-          <FeatureCard title="Full Transcripts" desc="Highly accurate, readable transcripts of your entire audio for deep-dive reference." icon={<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h7" />} />
-          <FeatureCard title="File Uploads" desc="Drag and drop existing audio files (.mp3, .wav, .webm) straight into the dashboard." icon={<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />} />
-          <FeatureCard title="WhatsApp Integration" desc="Forward your voice notes directly to GIST via WhatsApp and get summaries instantly." icon={<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />} />
-        </div>
-      </section>
+      <motion.section initial="hidden" whileInView="show" viewport={{ once: true, amount: 0.15 }} variants={staggerContainer} id="features" className="relative w-full max-w-5xl mx-auto pt-28 pb-24 px-5 sm:px-8 border-t border-white/5">
+        <div className="absolute top-[50%] left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-3xl h-125 bg-[#1E293B]/20 rounded-full blur-[120px] pointer-events-none z-0"></div>
+        <motion.div variants={bgTextReveal} className="absolute top-10 left-1/2 -translate-x-1/2 z-0 pointer-events-none w-full text-center select-none flex justify-center"><h2 className="text-[8rem] md:text-[14rem] lg:text-[18rem] font-bold text-white/5 tracking-[0.15em] leading-none mix-blend-overlay pl-10">FEATURES</h2></motion.div>
+        <div className="relative z-10 text-center max-w-2xl mx-auto mb-14 mt-8"><motion.h2 variants={fadeUp} className="text-3xl md:text-4xl font-bold tracking-tight text-[#F1F5F9]">Everything you need to understand voice</motion.h2><motion.p variants={fadeUp} className="text-sm text-[#94A3B8] mt-3">GIST transforms your scattered audio thoughts into structured, actionable intelligence instantly.</motion.p></div>
+        <motion.div variants={staggerContainer} className="relative z-10 grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-6 items-stretch">
+          <motion.div variants={fadeUp} className="h-full"><FeatureCard title="The Gist" desc="Instantly get the core message of any voice note without listening to the whole thing." icon={<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />} /></motion.div>
+          <motion.div variants={fadeUp} className="h-full"><FeatureCard title="Action Items" desc="Automatically extracts tasks, deadlines, and responsibilities so nothing slips through the cracks." icon={<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5H7a2 2 0 00-2 2v12a2 2 0 002 2h10a2 2 0 002-2V7a2 2 0 00-2-2h-2M9 5a2 2 0 002 2h2a2 2 0 002-2M9 5a2 2 0 012-2h2a2 2 0 012 2m-6 9l2 2 4-4" />} /></motion.div>
+          <motion.div variants={fadeUp} className="h-full"><FeatureCard title="Smart Replies" desc="Generate context-aware replies in Professional, Friendly, Short, or Assertive tones instantly." icon={<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 10h10a8 8 0 018 8v2M3 10l6 6m-6-6l6-6" />} /></motion.div>
+          <motion.div variants={fadeUp} className="h-full"><FeatureCard title="Data Export" desc="One-click copy or download your summaries and transcripts directly to TXT or CSV formats." icon={<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 6h16M4 12h16M4 18h7" />} /></motion.div>
+          <motion.div variants={fadeUp} className="h-full"><FeatureCard title="File Uploads" desc="Drag and drop existing audio files (.mp3, .wav, .webm) straight into the dashboard." icon={<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 16a4 4 0 01-.88-7.903A5 5 0 1115.9 6L16 6a5 5 0 011 9.9M15 13l-3-3m0 0l-3 3m3-3v12" />} /></motion.div>
+          <motion.div variants={fadeUp} className="h-full"><FeatureCard title="Global Translation" desc="Instantly translate foreign language transcripts and summaries directly into English." icon={<path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />} /></motion.div>
+        </motion.div>
+      </motion.section>
 
-      {/* FAQ SECTION */}
-      <section id="faq" className="scroll-animate opacity-0 translate-y-8 transition-all duration-700 ease-out w-full max-w-3xl mx-auto px-5 sm:px-8 py-20 border-t border-stone-200 d-border">
-        <div className="text-center mb-12">
-          <h2 className="text-3xl font-bold tracking-tight text-stone-900 d-text-primary">Frequently Asked Questions</h2>
-        </div>
-        <div className="space-y-4">
-          <FAQItem question="What is GIST?" answer="GIST is a Voice Intelligence tool designed to instantly transcribe and summarize your voice notes, extracting key points, action items, and generating suggested replies." />
-          <FAQItem question="How does GIST work?" answer="You can record directly in your browser or upload an audio file. Our underlying AI model securely processes the audio to generate a highly accurate transcript and intelligent summaries." />
-          <FAQItem question="Can I upload an audio file?" answer="Yes, you can easily drag and drop standard audio files directly into the dashboard for processing." />
-          <FAQItem question="Does GIST support multiple languages?" answer="Yes, GIST automatically detects and transcribes multiple languages supported by our core AI models." />
-          <FAQItem question="Is my audio private?" answer="Yes. Your audio is securely processed solely for generating your transcript and summary, and we do not use your personal voice data to train public models." />
-          <FAQItem question="Can I use GIST with WhatsApp?" answer="Yes, GIST features a WhatsApp webhook integration allowing you to seamlessly process voice notes directly from your phone." />
-          <FAQItem question="What does Pro include?" answer="Pro includes extended usage limits, full access to advanced structured insights, and priority processing." />
-          <FAQItem question="How does billing work?" answer="We offer a straightforward subscription billed securely through our payment provider (Polar), which you can manage at any time." />
-        </div>
-      </section>
+      <motion.section initial="hidden" whileInView="show" viewport={{ once: true, amount: 0.15 }} variants={staggerContainer} id="faq" className="relative w-full max-w-4xl mx-auto pt-28 pb-24 px-5 sm:px-8 border-t border-white/5">
+        <div className="absolute top-[60%] left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-2xl h-125 bg-[#0F172A]/40 rounded-full blur-[120px] pointer-events-none z-0"></div>
+        <motion.div variants={bgTextReveal} className="absolute top-10 left-1/2 -translate-x-1/2 z-0 pointer-events-none w-full text-center select-none flex justify-center"><h2 className="text-[10rem] md:text-[16rem] lg:text-[20rem] font-bold text-white/5 tracking-[0.15em] leading-none mix-blend-overlay pl-12">FAQ</h2></motion.div>
+        <motion.div variants={fadeUp} className="relative z-10 text-center mb-14 mt-8"><h2 className="text-3xl md:text-4xl font-bold tracking-tight text-[#F1F5F9]">Frequently Asked Questions</h2></motion.div>
+        <motion.div variants={staggerContainer} className="relative z-10 space-y-6 max-w-3xl mx-auto">
+          <motion.div variants={fadeUp}><FAQItem question="What is GIST?" answer="GIST is a Voice Intelligence tool designed to instantly transcribe and summarize your voice notes, extracting key points, action items, and generating suggested replies." /></motion.div>
+          <motion.div variants={fadeUp}><FAQItem question="How does GIST work?" answer="You can record directly in your browser or upload an audio file. Our underlying AI model securely processes the audio to generate a highly accurate transcript and intelligent summaries." /></motion.div>
+          <motion.div variants={fadeUp}><FAQItem question="Can I upload an audio file?" answer="Yes, you can easily drag and drop standard audio files directly into the dashboard for processing." /></motion.div>
+          <motion.div variants={fadeUp}><FAQItem question="Does GIST support multiple languages?" answer="Yes, GIST automatically detects and transcribes multiple languages supported by our core AI models. Pro users can also translate them instantly." /></motion.div>
+          <motion.div variants={fadeUp}><FAQItem question="Is my audio private?" answer="Yes. Your audio is securely processed solely for generating your transcript and summary, and we do not use your personal voice data to train public models." /></motion.div>
+          <motion.div variants={fadeUp}><FAQItem question="Can I export the data?" answer="Yes! Pro users can one-click copy all intelligence, or download perfectly formatted TXT and CSV files directly from the dashboard." /></motion.div>
+        </motion.div>
+      </motion.section>
 
-      {/* PRICING SECTION */}
-      <section id="pricing" className="scroll-animate opacity-0 translate-y-8 transition-all duration-700 ease-out w-full max-w-5xl mx-auto px-5 sm:px-8 py-20 border-t border-stone-200 d-border mb-16">
-        <div className="text-center max-w-2xl mx-auto mb-16">
-          <h2 className="text-3xl font-bold tracking-tight text-stone-900 d-text-primary">Simple, transparent pricing</h2>
-          <p className="text-base text-stone-500 d-text-secondary mt-4">Start for free, upgrade when you need more power.</p>
-        </div>
-        
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-8 max-w-3xl mx-auto items-stretch">
-          <div className="p-8 bg-white border border-stone-200 rounded-3xl shadow-sm flex flex-col hover:shadow-md transition-shadow duration-300 d-card d-border">
-            <h3 className="text-xl font-bold text-stone-900 d-text-primary mb-2">Free</h3>
-            <p className="text-stone-500 d-text-secondary text-sm mb-6">Perfect for trying out GIST.</p>
-            <div className="mb-8">
-              <span className="text-4xl font-bold text-stone-900 d-text-primary">$0</span>
-              <span className="text-stone-400 d-text-secondary">/mo</span>
-            </div>
-            <ul className="space-y-4 mb-8 flex-1">
-              <li className="flex items-center gap-3 text-stone-700 d-text-primary text-sm"><svg className="w-5 h-5 text-stone-400 d-text-secondary shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>5 free uses per month</li>
-              <li className="flex items-center gap-3 text-stone-700 d-text-primary text-sm"><svg className="w-5 h-5 text-stone-400 d-text-secondary shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>Core AI transcription</li>
-              <li className="flex items-center gap-3 text-stone-700 d-text-primary text-sm"><svg className="w-5 h-5 text-stone-400 d-text-secondary shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>Basic summaries</li>
+      <motion.section initial="hidden" whileInView="show" viewport={{ once: true, amount: 0.15 }} variants={staggerContainer} id="pricing" className="relative w-full max-w-5xl mx-auto pt-28 pb-24 px-4 flex flex-col items-center justify-center mb-16 border-t border-white/5">
+        <motion.div animate={prefersReducedMotion ? {} : { scale: [1, 1.08, 1], opacity: [0.1, 0.2, 0.1] }} transition={{ duration: 5, repeat: Infinity, ease: "easeInOut" }} className="absolute top-[50%] left-1/2 -translate-x-1/2 -translate-y-1/2 w-full max-w-200 h-125 bg-[#1E293B] rounded-full blur-[150px] pointer-events-none z-0" />
+        <motion.div variants={bgTextReveal} className="absolute top-10 left-1/2 -translate-x-1/2 z-0 pointer-events-none w-full text-center select-none flex justify-center"><h2 className="text-[8rem] md:text-[12rem] lg:text-[14rem] font-bold text-white/5 tracking-widest leading-none mix-blend-overlay pl-8">Pricing</h2></motion.div>
+        <motion.div variants={staggerContainer} className="relative z-10 w-full max-w-4xl grid grid-cols-1 md:grid-cols-2 gap-8 mt-20">
+          <motion.div variants={fadeUp} className="flex flex-col bg-[#0F172A]/90 backdrop-blur-xl border border-white/5 rounded-4xl p-8 hover:-translate-y-1.5 transition-transform duration-300">
+            <p className="text-[#94A3B8] text-xs font-semibold uppercase tracking-wider mb-3">Free Plan</p><h3 className="text-[#F1F5F9] text-4xl font-bold tracking-tight mb-8">Free</h3>
+            <ul className="flex flex-col gap-3.5 mb-10 grow text-xs text-[#94A3B8]">
+              <li className="flex items-center gap-3"><CheckIcon /> 5 free uses per month</li><li className="flex items-center gap-3"><CheckIcon /> Core AI transcription</li><li className="flex items-center gap-3"><CheckIcon /> Basic summaries</li>
             </ul>
-            <button className="w-full py-3 px-4 bg-stone-100 border border-stone-200 text-stone-600 font-medium rounded-xl hover:bg-stone-200 active:scale-95 transition-all d-elevated d-border d-text-primary d-hover">Current Plan</button>
-          </div>
-
-          <div className="p-8 bg-stone-900 border border-transparent rounded-3xl shadow-xl flex flex-col relative overflow-hidden hover:shadow-2xl transition-shadow duration-300 transform md:-translate-y-2 d-elevated d-border">
-            <div className="absolute top-0 right-0 bg-stone-700 text-stone-50 text-xs font-bold uppercase tracking-wider py-1 px-3 rounded-bl-xl shadow-sm d-card">Popular</div>
-            <h3 className="text-xl font-bold text-white d-text-primary mb-2">Pro</h3>
-            <p className="text-stone-400 d-text-secondary text-sm mb-6">For professionals who rely on voice.</p>
-            <div className="mb-8">
-              <span className="text-4xl font-bold text-white d-text-primary">$9.99</span>
-              <span className="text-stone-500 d-text-secondary">/mo</span>
-            </div>
-            <ul className="space-y-4 mb-8 flex-1">
-              <li className="flex items-center gap-3 text-stone-200 d-text-primary text-sm"><svg className="w-5 h-5 text-stone-500 d-text-secondary shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>Unlimited voice processing</li>
-              <li className="flex items-center gap-3 text-stone-200 d-text-primary text-sm"><svg className="w-5 h-5 text-stone-500 d-text-secondary shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>Advanced Action Items & Replies</li>
-              <li className="flex items-center gap-3 text-stone-200 d-text-primary text-sm"><svg className="w-5 h-5 text-stone-500 d-text-secondary shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>WhatsApp Bot Integration</li>
-              <li className="flex items-center gap-3 text-stone-200 d-text-primary text-sm"><svg className="w-5 h-5 text-stone-500 d-text-secondary shrink-0" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>Priority processing speed</li>
+            <button type="button" disabled className="w-full mt-auto py-3 rounded-full border border-white/10 text-[#94A3B8] font-medium text-xs bg-white/5 cursor-default">{entitlements.tier === 'FREE' ? 'Current Plan' : 'Free Tier Included'}</button>
+          </motion.div>
+          <motion.div variants={fadeUp} className="flex flex-col bg-[#0F172A]/95 backdrop-blur-2xl border border-white/15 rounded-4xl p-8 transform md:scale-105 shadow-[0_0_60px_rgba(15,23,42,0.8)] z-20 hover:-translate-y-1.5 transition-transform duration-300 relative">
+            <div className="absolute inset-0 bg-linear-to-b from-white/5 to-transparent rounded-4xl pointer-events-none"></div>
+            <div className="flex items-center justify-between mb-3 relative z-10"><p className="text-[#94A3B8] text-xs font-semibold uppercase tracking-wider">Pro Plan</p>{entitlements.tier === 'PRO' && <span className="px-2.5 py-0.5 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 text-[10px] font-bold">Active</span>}</div>
+            <div className="flex items-end gap-1 mb-8 relative z-10"><h3 className="text-[#F1F5F9] text-4xl font-bold tracking-tight">$9.99</h3><span className="text-[#94A3B8] mb-1 text-sm font-medium">/month</span></div>
+            <ul className="flex flex-col gap-3.5 mb-10 grow text-xs text-[#94A3B8] relative z-10">
+              <li className="flex items-center gap-3"><CheckIcon /> Unlimited voice processing</li><li className="flex items-center gap-3"><CheckIcon /> Task & Deadline Extraction</li><li className="flex items-center gap-3"><CheckIcon /> Smart Tone Reply Generator</li><li className="flex items-center gap-3"><CheckIcon /> 1-Click TXT & CSV Exports</li><li className="flex items-center gap-3"><CheckIcon /> Global Language Translations</li>
             </ul>
-            <form action="/api/checkout" method="POST" className="w-full mt-auto">
-              <button type="submit" className="w-full py-3 px-4 bg-white text-stone-900 font-medium rounded-xl hover:bg-stone-100 active:scale-95 transition-all shadow-sm d-accent-bg">Upgrade to Pro</button>
-            </form>
-          </div>
-        </div>
-      </section>
+            {entitlements.tier === 'PRO' ? (
+              <button type="button" disabled className="w-full mt-auto py-3 rounded-full bg-emerald-500/10 border border-emerald-500/30 text-emerald-400 font-bold text-xs cursor-default flex items-center justify-center gap-2"><span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />Current Active Subscription</button>
+            ) : (
+              <form action="/api/checkout" method="POST" className="mt-auto relative z-10"><input type="hidden" name="plan" value="pro" /><motion.button whileHover={{ scale: 1.02 }} whileTap={{ scale: 0.98 }} transition={buttonSpring} type="submit" className="w-full py-3 rounded-full bg-[#F1F5F9] text-[#0B1220] font-bold text-xs shadow-[0_0_20px_rgba(241,245,249,0.2)] hover:shadow-[0_0_30px_rgba(241,245,249,0.3)] transition-shadow">Upgrade to Pro</motion.button></form>
+            )}
+          </motion.div>
+        </motion.div>
+      </motion.section>
+      {/* SUPPORT SECTION */}
+      <motion.section initial="hidden" whileInView="show" viewport={{ once: true, amount: 0.15 }} variants={staggerContainer} id="support" className="relative w-full max-w-5xl mx-auto pt-24 pb-28 px-4 flex flex-col items-center justify-center border-t border-black/5 dark:border-[rgba(255,255,255,0.04)]">
+        <motion.div variants={fadeUp} className="relative z-10 text-center mb-10">
+          <h2 className="text-2xl md:text-3xl font-bold tracking-tight text-[#111827] dark:text-[#F3F1EC]">Support</h2>
+          <p className="text-sm text-[#6B7280] dark:text-[#98A0B2] mt-3">Need help with GIST? We're here for you.</p>
+        </motion.div>
+
+        <motion.div variants={staggerContainer} className="relative z-10 w-full max-w-3xl grid grid-cols-1 md:grid-cols-3 gap-5">
+          {/* Email Card */}
+          <motion.a href="mailto:nasir.ah.khan99@gmail.com" variants={fadeUp} className="flex flex-col items-center text-center p-6 bg-white dark:bg-[#121827] border border-black/5 dark:border-[rgba(255,255,255,0.06)] rounded-2xl hover:border-black/10 dark:hover:border-white/10 transition-colors group shadow-sm hover:shadow-md">
+            <div className="w-10 h-10 rounded-full bg-black/5 dark:bg-white/5 flex items-center justify-center mb-4 text-[#111827] dark:text-[#F3F1EC] group-hover:scale-110 transition-transform">
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 8l7.89 5.26a2 2 0 002.22 0L21 8M5 19h14a2 2 0 002-2V7a2 2 0 00-2-2H5a2 2 0 00-2 2v10a2 2 0 002 2z" /></svg>
+            </div>
+            <h4 className="text-[11px] font-bold uppercase tracking-widest text-[#111827] dark:text-[#F3F1EC] mb-1">Email</h4>
+            <span className="text-sm text-[#6B7280] dark:text-[#98A0B2] group-hover:text-[#111827] dark:group-hover:text-[#F3F1EC] transition-colors break-all">nasir.ah.khan99<br/>@gmail.com</span>
+          </motion.a>
+
+          {/* Phone Card */}
+          <motion.a href="tel:03357333789" variants={fadeUp} className="flex flex-col items-center text-center p-6 bg-white dark:bg-[#121827] border border-black/5 dark:border-[rgba(255,255,255,0.06)] rounded-2xl hover:border-black/10 dark:hover:border-white/10 transition-colors group shadow-sm hover:shadow-md">
+            <div className="w-10 h-10 rounded-full bg-black/5 dark:bg-white/5 flex items-center justify-center mb-4 text-[#111827] dark:text-[#F3F1EC] group-hover:scale-110 transition-transform">
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" /></svg>
+            </div>
+            <h4 className="text-[11px] font-bold uppercase tracking-widest text-[#111827] dark:text-[#F3F1EC] mb-1">Phone</h4>
+            <span className="text-sm text-[#6B7280] dark:text-[#98A0B2] group-hover:text-[#111827] dark:group-hover:text-[#F3F1EC] transition-colors">03357333789</span>
+          </motion.a>
+
+          {/* Location Card */}
+          <motion.div variants={fadeUp} className="flex flex-col items-center text-center p-6 bg-white dark:bg-[#121827] border border-black/5 dark:border-[rgba(255,255,255,0.06)] rounded-2xl shadow-sm">
+            <div className="w-10 h-10 rounded-full bg-black/5 dark:bg-white/5 flex items-center justify-center mb-4 text-[#111827] dark:text-[#F3F1EC]">
+              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M17.657 16.657L13.414 20.9a1.998 1.998 0 01-2.827 0l-4.244-4.243a8 8 0 1111.314 0z" /><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 11a3 3 0 11-6 0 3 3 0 016 0z" /></svg>
+            </div>
+            <h4 className="text-[11px] font-bold uppercase tracking-widest text-[#111827] dark:text-[#F3F1EC] mb-1">Location</h4>
+            <span className="text-sm text-[#6B7280] dark:text-[#98A0B2]">Islamabad Capital Territory, Pakistan</span>
+          </motion.div>
+        </motion.div>
+      </motion.section>
       
-      {/* GLOBAL STYLES FOR ANIMATIONS AND THEME OVERRIDES */}
       <style dangerouslySetInnerHTML={{__html: `
-        /* --- Premium Light Mode --- */
-        html, body {
-          background-color: #F8F9FA; 
-          color: #1c1917; 
-          scroll-behavior: smooth;
-          overscroll-behavior-y: none;
-          transition: background-color 0.3s ease, color 0.3s ease;
-        }
-
-        /* --- Premium Graphite Dark Mode --- */
-        html.dark, html.dark body { 
-          background-color: #111110 !important; 
-          color: #F2F0EB !important; 
-        }
-        html.dark .d-header { background-color: rgba(22, 22, 21, 0.85) !important; border-color: #302F2B !important; }
-        html.dark .d-card { background-color: #1C1B19 !important; border-color: #302F2B !important; }
-        html.dark .d-elevated { background-color: #22211F !important; border-color: #302F2B !important; }
-        html.dark .d-text-primary { color: #F2F0EB !important; }
-        html.dark .d-text-secondary { color: #A8A6A0 !important; }
-        html.dark .d-border { border-color: #302F2B !important; }
-        html.dark .d-accent-bg { background-color: #C9C3B8 !important; color: #111110 !important; border-color: #C9C3B8 !important; }
-        html.dark .d-accent-bg:hover { background-color: #F2F0EB !important; color: #111110 !important; }
-        html.dark .d-success { color: #7FC8A0 !important; }
-        html.dark .d-accent { color: #C9C3B8 !important; }
-        html.dark .d-reply-card { background-color: #1C1B19 !important; border-color: #302F2B !important; }
-        html.dark .d-reply-text { color: #9FB7D1 !important; }
-        html.dark .d-hover:hover { background-color: #22211F !important; }
-        html.dark .d-hover-text:hover { color: #F2F0EB !important; }
-        html.dark .d-icon-bg { background-color: #22211F !important; border-color: #302F2B !important; }
-        html.dark .d-skeleton { background-color: #302F2B !important; }
-        html.dark .d-blur-overlay { background-color: rgba(17, 17, 16, 0.7) !important; }
-
-        /* --- Animations --- */
-        @keyframes micPulse {
-          0% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0.4); }
-          70% { box-shadow: 0 0 0 20px rgba(239, 68, 68, 0); }
-          100% { box-shadow: 0 0 0 0 rgba(239, 68, 68, 0); }
-        }
-        .mic-recording {
-          animation: micPulse 2s infinite;
-          background-color: #ef4444 !important;
-          color: white !important;
-          border-color: #ef4444 !important;
-        }
-
-        @keyframes waveform {
-          0% { transform: scaleY(0.4); }
-          50% { transform: scaleY(1); }
-          100% { transform: scaleY(0.4); }
-        }
-        .animate-waveform {
-          animation: waveform 1s ease-in-out infinite;
-          transform-origin: bottom;
-        }
-        @keyframes fadeIn {
-          from { opacity: 0; }
-          to { opacity: 1; }
-        }
-        .fade-in { animation: fadeIn 0.4s ease-out forwards; }
-        
-        @keyframes fadeInUp {
-          from { opacity: 0; transform: translateY(16px); }
-          to { opacity: 1; transform: translateY(0); }
-        }
-        .fade-in-up { animation: fadeInUp 0.4s cubic-bezier(0.16, 1, 0.3, 1) forwards; }
-
-        /* Custom Scrollbar */
-        .custom-scrollbar::-webkit-scrollbar { width: 6px; }
+        html, body { background-color: #0B1220 !important; color: #F1F5F9; scroll-behavior: smooth; overscroll-behavior-y: none; }
+        .custom-scrollbar::-webkit-scrollbar { width: 5px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: transparent; }
-        .custom-scrollbar::-webkit-scrollbar-thumb { background-color: #d6d3d1; border-radius: 20px; }
-        html.dark .custom-scrollbar::-webkit-scrollbar-thumb { background-color: #302F2B; }
-        
+        .custom-scrollbar::-webkit-scrollbar-thumb { background-color: #1E293B; border-radius: 20px; }
         .wrap-break-word { overflow-wrap: break-word; word-wrap: break-word; }
-        
-        @media (prefers-reduced-motion: reduce) {
-          * {
-            animation-duration: 0.01ms !important;
-            animation-iteration-count: 1 !important;
-            transition-duration: 0.01ms !important;
-            scroll-behavior: auto !important;
-          }
-        }
+        @media (prefers-reduced-motion: reduce) { * { animation-duration: 0.01ms !important; animation-iteration-count: 1 !important; transition-duration: 0.01ms !important; scroll-behavior: auto !important; } }
       `}} />
     </div>
   );
 }
 
-// Subcomponents
+// --- Subcomponents ---
 
-function LockedProCard({ title, desc }: { title: string, desc: string }) {
+function MockResultCard({ title }: { title: string }) {
   return (
-    <div className="p-6 sm:p-8 border rounded-2xl transition-all duration-300 flex flex-col min-h-36 relative overflow-hidden bg-white border-stone-200 d-card d-border group">
-      {/* Blurred Overlay */}
-      <div className="absolute inset-0 bg-stone-50/60 backdrop-blur-sm z-10 flex flex-col items-center justify-center p-6 transition-all duration-300 group-hover:backdrop-blur-md d-blur-overlay">
-        <svg className="w-8 h-8 text-stone-400 mb-3 d-text-secondary" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
-        </svg>
-        <h4 className="text-sm font-bold text-stone-900 mb-1 d-text-primary">Pro Feature</h4>
-        <p className="text-xs text-stone-500 mb-4 text-center d-text-secondary">{desc}</p>
-        <a href="/api/checkout" className="px-5 py-2 bg-stone-900 text-stone-50 text-xs font-medium rounded-full hover:scale-105 active:scale-95 transition-transform shadow-sm d-accent-bg">
-          Unlock Pro
-        </a>
-      </div>
-      
-      {/* Background skeleton */}
-      <div className="flex justify-between items-center mb-6 opacity-40">
-        <h3 className="text-xs font-bold uppercase tracking-widest text-stone-400 d-text-secondary">{title}</h3>
-      </div>
-      <div className="space-y-3 opacity-30">
-        <div className="h-3 bg-stone-200 rounded w-full d-skeleton"></div>
-        <div className="h-3 bg-stone-200 rounded w-5/6 d-skeleton"></div>
-        <div className="h-3 bg-stone-200 rounded w-4/6 d-skeleton"></div>
+    <div className="p-5 border border-white/5 rounded-2xl bg-[#0F172A]/50 flex flex-col min-h-24">
+      <h3 className="text-xs font-bold uppercase tracking-widest text-[#94A3B8] mb-4">{title}</h3>
+      <div className="space-y-3 opacity-40">
+        <div className="h-2.5 bg-white/20 rounded-full w-full"></div>
+        <div className="h-2.5 bg-white/20 rounded-full w-4/5"></div>
+        <div className="h-2.5 bg-white/20 rounded-full w-3/4"></div>
       </div>
     </div>
   );
@@ -846,148 +543,173 @@ function LockedProCard({ title, desc }: { title: string, desc: string }) {
 
 function FeatureCard({ title, desc, icon }: { title: string, desc: string, icon: React.ReactNode }) {
   return (
-    <div className="p-6 bg-white border border-stone-200 rounded-2xl shadow-sm hover:shadow-md hover:-translate-y-1 transition-all duration-300 d-card d-border">
-      <div className="w-11 h-11 bg-stone-50 rounded-xl border border-stone-100 flex items-center justify-center mb-5 text-stone-700 shadow-sm transition-transform duration-300 group-hover:scale-110 d-icon-bg d-text-primary" aria-hidden="true">
-        <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">{icon}</svg>
-      </div>
-      <h3 className="text-base font-semibold text-stone-900 mb-2 d-text-primary">{title}</h3>
-      <p className="text-sm text-stone-500 leading-relaxed d-text-secondary">{desc}</p>
-    </div>
+    <motion.div whileHover={{ y: -4, scale: 1.01 }} transition={{ type: "spring", stiffness: 400, damping: 25 }} className="h-full flex flex-col p-7 bg-[#0F172A]/80 backdrop-blur-xl border border-white/5 rounded-3xl shadow-sm transition-colors duration-200 hover:border-white/15">
+      <div className="w-10 h-10 bg-white/5 rounded-xl border border-white/5 flex items-center justify-center mb-5 text-[#F1F5F9] shadow-sm shrink-0" aria-hidden="true"><svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">{icon}</svg></div>
+      <h3 className="text-base font-bold text-[#F1F5F9] mb-2 tracking-wide">{title}</h3>
+      <p className="text-xs text-[#94A3B8] leading-relaxed grow">{desc}</p>
+    </motion.div>
   );
 }
 
 function FAQItem({ question, answer }: { question: string, answer: string }) {
   const [isOpen, setIsOpen] = useState(false);
-
   return (
-    <div className="border border-stone-200 rounded-2xl bg-white shadow-sm overflow-hidden transition-all duration-300 hover:shadow-md d-card d-border">
-      <button 
-        onClick={() => setIsOpen(!isOpen)} aria-expanded={isOpen}
-        className="w-full flex items-center justify-between p-5 text-left focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-indigo-500 hover:bg-stone-50 transition-colors active:bg-stone-100 d-hover"
-      >
-        <span className="font-medium text-stone-900 pr-4 d-text-primary">{question}</span>
-        <svg className={`w-5 h-5 text-stone-400 transition-transform duration-300 shrink-0 d-text-secondary ${isOpen ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-        </svg>
-      </button>
-      <div className={`px-5 transition-all duration-400 ease-in-out overflow-hidden ${isOpen ? 'max-h-96 pb-5 opacity-100' : 'max-h-0 opacity-0'}`} aria-hidden={!isOpen}>
-        <p className="text-stone-600 text-sm leading-relaxed d-text-secondary">{answer}</p>
-      </div>
-    </div>
+    <motion.div layout className="border border-white/5 rounded-2xl bg-[#0F172A]/80 backdrop-blur-xl shadow-sm overflow-hidden hover:border-white/10 transition-colors">
+      <motion.button layout onClick={() => setIsOpen(!isOpen)} aria-expanded={isOpen} className="w-full flex items-center justify-between p-6 text-left focus:outline-none group">
+        <span className="font-medium text-sm text-[#F1F5F9] group-hover:text-white transition-colors pr-4">{question}</span>
+        <motion.div animate={{ rotate: isOpen ? 180 : 0 }} transition={{ type: "spring", stiffness: 350, damping: 22 }} className="w-7 h-7 rounded-full bg-white/5 flex items-center justify-center shrink-0 group-hover:bg-[#1E293B] transition-colors"><svg className="w-3.5 h-3.5 text-[#94A3B8] group-hover:text-[#F1F5F9] transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24" aria-hidden="true"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" /></svg></motion.div>
+      </motion.button>
+      <AnimatePresence>
+        {isOpen && (
+          <motion.div layout initial={{ height: 0, opacity: 0 }} animate={{ height: 'auto', opacity: 1 }} exit={{ height: 0, opacity: 0 }} transition={{ duration: 0.25, ease: snappyEase }} className="px-6 overflow-hidden"><p className="text-[#94A3B8] text-xs leading-relaxed pb-6 pt-1">{answer}</p></motion.div>
+        )}
+      </AnimatePresence>
+    </motion.div>
   );
 }
 
 function ProcessingStep({ label, isActive, isDone }: { label: string, isActive: boolean, isDone: boolean }) {
   return (
-    <div className={`flex items-center gap-4 transition-all duration-400 ease-out ${isActive || isDone ? 'opacity-100 translate-x-0' : 'opacity-40 -translate-x-2'}`}>
-      <div className="relative w-6 h-6 flex items-center justify-center shrink-0">
+    <div className={`flex items-center gap-4 transition-all duration-300 ease-out ${isActive || isDone ? 'opacity-100' : 'opacity-30'}`}>
+      <div className="relative w-4 h-4 flex items-center justify-center shrink-0">
         {isDone ? (
-          <svg className="w-5 h-5 text-stone-900 fade-in d-text-primary" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" /></svg>
+          <motion.svg initial={{ scale: 0 }} animate={{ scale: 1 }} className="w-4 h-4 text-emerald-400 relative z-10 bg-[#0B1220]" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></motion.svg>
         ) : isActive ? (
-          <svg className="w-5 h-5 text-stone-900 animate-spin d-text-primary" fill="none" viewBox="0 0 24 24">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3"></circle>
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path>
-          </svg>
+          <motion.div animate={{ scale: [1, 1.4, 1], opacity: [1, 0.6, 1] }} transition={{ duration: 1.2, repeat: Infinity, ease: "easeInOut" }} className="w-2.5 h-2.5 rounded-full bg-[#F1F5F9] relative z-10" />
         ) : (
-          <div className="w-2 h-2 rounded-full bg-stone-200 transition-all duration-300 d-skeleton"></div>
+          <div className="w-2 h-2 rounded-full bg-[#1E293B] relative z-10"></div>
         )}
       </div>
-      <span className={`text-sm font-medium transition-colors duration-300 ${isActive ? 'text-stone-900 d-text-primary' : 'text-stone-400 d-text-secondary'}`}>{label}</span>
+      <span className={`text-xs font-medium transition-colors duration-200 ${isActive ? 'text-[#F1F5F9]' : 'text-[#94A3B8]'}`}>{label}</span>
     </div>
   );
 }
 
 function MiniWaveform() {
   return (
-    <div className="flex items-end gap-2px h-5" aria-hidden="true">
-      <div className="w-1 bg-stone-400 rounded-full animate-waveform d-text-secondary" style={{ height: '60%', animationDelay: '0.0s' }} />
-      <div className="w-1 bg-stone-600 rounded-full animate-waveform d-text-secondary" style={{ height: '100%', animationDelay: '0.2s' }} />
-      <div className="w-1 bg-stone-900 rounded-full animate-waveform d-text-primary" style={{ height: '40%', animationDelay: '0.4s' }} />
-      <div className="w-1 bg-stone-500 rounded-full animate-waveform d-text-secondary" style={{ height: '80%', animationDelay: '0.1s' }} />
-    </div>
-  );
-}
-
-function SkeletonCard({ fullWidth = false }: { fullWidth?: boolean }) {
-  return (
-    <div className={`p-6 bg-white border border-stone-200 rounded-2xl shadow-sm flex flex-col min-h-36 d-card d-border ${fullWidth ? 'md:col-span-2' : ''}`} aria-hidden="true">
-      <div className="flex justify-between items-center mb-6">
-        <div className="h-3 w-24 bg-stone-100 rounded animate-pulse d-skeleton"></div>
-        <div className="h-5 w-5 bg-stone-100 rounded animate-pulse d-skeleton"></div>
-      </div>
-      <div className="space-y-3">
-        <div className="h-3 bg-stone-100 rounded w-full animate-pulse d-skeleton"></div>
-        <div className="h-3 bg-stone-100 rounded w-5/6 animate-pulse d-skeleton"></div>
-        <div className="h-3 bg-stone-100 rounded w-4/6 animate-pulse d-skeleton"></div>
-      </div>
+    <div className="flex items-end gap-0.5 h-4" aria-hidden="true">
+      {[0.4, 0.8, 0.3, 1, 0.5].map((h, i) => <motion.div key={i} animate={{ scaleY: [h, 1, h] }} transition={{ duration: 0.8, repeat: Infinity, delay: i * 0.1, ease: "easeInOut" }} className="w-0.5 bg-[#F1F5F9] rounded-full origin-bottom" style={{ height: '100%' }} />)}
     </div>
   );
 }
 
 type CardVariant = 'summary' | 'keyPoints' | 'actionItems' | 'reply' | 'transcript';
 
-function ResultCard({ title, content, variant, fullWidth = false, isPrimary = false, scrollable = false }: { title: string, content: string | string[], variant: CardVariant, fullWidth?: boolean, isPrimary?: boolean, scrollable?: boolean }) {
+interface ResultCardProps {
+  title: string;
+  content: string | string[] | any;
+  variant: CardVariant;
+  fullWidth?: boolean;
+  isPrimary?: boolean;
+  scrollable?: boolean;
+  activeTone?: string;
+  onChangeTone?: (tone: string) => void;
+  isRegenerating?: boolean;
+  showTranslate?: boolean;
+}
+
+function ResultCard({ title, content, variant, fullWidth = false, isPrimary = false, scrollable = false, activeTone, onChangeTone, isRegenerating, showTranslate }: ResultCardProps) {
   const [copied, setCopied] = useState(false);
-  const safeContent = Array.isArray(content) ? content.join('\n') : String(content || '');
+  const [translatedText, setTranslatedText] = useState<string | null>(null);
+  const [isTranslating, setIsTranslating] = useState(false);
+
+  useEffect(() => { setTranslatedText(null); }, [activeTone, content]);
+
+  const rawStringContent = variant === 'reply' && typeof content === 'object' && content !== null && activeTone
+    ? content[activeTone.toLowerCase()] || Object.values(content)[0] || ''
+    : Array.isArray(content) ? content.join('\n') : String(content || '');
+
+  const displayContent = translatedText !== null ? translatedText : rawStringContent;
 
   const handleCopy = () => {
-    navigator.clipboard.writeText(safeContent);
-    setCopied(true);
-    setTimeout(() => setCopied(false), 2000);
+    navigator.clipboard.writeText(displayContent); setCopied(true); setTimeout(() => setCopied(false), 2000);
   };
 
-  let containerStyles = "bg-white border-stone-200 shadow-sm d-card d-border";
-  let titleStyles = "text-stone-400 d-text-secondary";
-  let contentStyles = "text-stone-700 d-text-primary";
+  const handleTranslate = async () => {
+    setIsTranslating(true);
+    try {
+      const res = await fetch('/api/translate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: rawStringContent }) });
+      if (res.ok) { const data = await res.json(); setTranslatedText(data.translation); }
+    } catch (e) { console.error(e); } finally { setIsTranslating(false); }
+  };
+
+  let containerStyles = "bg-[#0F172A] border-white/5 shadow-sm";
+  let titleStyles = "text-[#94A3B8]";
+  let contentStyles = "text-[#F1F5F9]";
 
   if (variant === 'summary') {
-    containerStyles = "bg-stone-50 border-stone-200 shadow-md d-elevated d-border";
-    titleStyles = "text-stone-900 d-text-primary";
-    contentStyles = isPrimary ? "text-stone-900 font-medium text-lg leading-relaxed d-text-primary" : "text-stone-800 font-medium d-text-primary";
+    containerStyles = "bg-linear-to-br from-[#1E293B] to-[#0F172A] border border-white/10 shadow-[0_0_20px_rgba(30,41,59,0.3)] ring-1 ring-white/5";
+    titleStyles = "text-emerald-400";
+    contentStyles = isPrimary ? "text-[#F1F5F9] font-medium text-lg leading-relaxed" : "text-[#F1F5F9] font-medium text-sm";
   } else if (variant === 'reply') {
-    containerStyles = "bg-indigo-50/50 border-indigo-100 shadow-sm d-reply-card d-border";
-    titleStyles = "text-indigo-800/60 d-text-secondary";
-    contentStyles = "text-indigo-900 d-reply-text";
+    containerStyles = "bg-[#0F172A]/70 border-white/10 shadow-sm";
+    titleStyles = "text-[#94A3B8]";
+    contentStyles = "text-[#F1F5F9] text-sm leading-relaxed";
   } else if (variant === 'transcript') {
-    containerStyles = "bg-stone-50 border-stone-200 shadow-inner d-card d-border";
-    contentStyles = "text-stone-600 font-mono text-sm leading-relaxed d-text-secondary";
+    containerStyles = "bg-[#0B1220]/60 border-white/5 shadow-inner";
+    contentStyles = "text-[#94A3B8] font-mono text-sm leading-relaxed tracking-wide";
   }
 
   const renderContent = () => {
     if (variant === 'keyPoints') {
-      return safeContent.split('\n').filter(Boolean).map((line, i) => (
-        <div key={i} className="flex items-start gap-3 mb-3 last:mb-0">
-          <svg className="w-5 h-5 text-emerald-600 shrink-0 mt-0.5 d-success" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
+      return displayContent.split('\n').filter(Boolean).map((line: string, i: number) => (
+        <div key={i} className="flex items-start gap-3 mb-3 last:mb-0 text-sm">
+          <svg className="w-4 h-4 text-emerald-400 shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 13l4 4L19 7" /></svg>
           <span className={contentStyles}>{line.replace(/^[•-]\s*/, '')}</span>
         </div>
       ));
     }
     if (variant === 'actionItems') {
-      return safeContent.split('\n').filter(Boolean).map((line, i) => (
-        <div key={i} className="flex items-start gap-3 mb-3 last:mb-0">
-          <svg className="w-5 h-5 text-indigo-600 shrink-0 mt-0.5 d-accent" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
+      return displayContent.split('\n').filter(Boolean).map((line: string, i: number) => (
+        <div key={i} className="flex items-start gap-3 mb-3 last:mb-0 text-sm">
+          <svg className="w-4 h-4 text-[#94A3B8] shrink-0 mt-0.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" /></svg>
           <span className={contentStyles}>{line.replace(/^\[[x ]?\]\s*/i, '')}</span>
         </div>
       ));
     }
-    return <div className="whitespace-pre-wrap wrap-break-word">{safeContent}</div>;
+    if (variant === 'reply' && isRegenerating) {
+       return (
+         <div className="flex items-center gap-3 text-[#94A3B8] h-full py-4 text-sm">
+            <svg className="w-5 h-5 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg>
+            Generating {activeTone?.toLowerCase()} reply...
+         </div>
+       );
+    }
+    return <div className="whitespace-pre-wrap wrap-break-word">{displayContent}</div>;
   };
 
   return (
-    <div className={`p-6 sm:p-8 border rounded-2xl transition-all duration-300 flex flex-col min-h-36 hover:shadow-md ${fullWidth ? 'md:col-span-2' : ''} ${containerStyles}`}>
-      <div className="flex justify-between items-center mb-6">
-        <h3 className={`text-xs font-bold uppercase tracking-widest ${titleStyles}`}>{title}</h3>
-        <button onClick={handleCopy} className="text-stone-400 hover:text-stone-800 hover:bg-stone-100 active:bg-stone-200 rounded-lg p-2 transition-all flex items-center justify-center w-9 h-9 relative group shrink-0 active:scale-95 d-text-secondary d-hover" title="Copy to clipboard">
-          {copied ? (
-            <svg className="w-4 h-4 text-emerald-600 absolute fade-in d-success" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" /></svg>
-          ) : (
-            <svg className="w-4 h-4 absolute transition-transform group-hover:scale-110" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>
+    <motion.div whileHover={{ y: -2 }} className={`p-5 border rounded-2xl transition-all duration-200 flex flex-col min-h-24 hover:border-white/15 backdrop-blur-sm ${fullWidth ? 'md:col-span-2' : ''} ${containerStyles}`}>
+      <div className="flex justify-between items-start mb-4 gap-4">
+        <div>
+           <h3 className={`text-xs font-bold uppercase tracking-widest ${titleStyles}`}>{title}</h3>
+           {variant === 'reply' && onChangeTone && (
+              <div className="flex flex-wrap gap-2 mt-3.5">
+                 {['Professional', 'Friendly', 'Short', 'Assertive'].map(tone => (
+                    <button key={tone} onClick={() => onChangeTone(tone)} disabled={isRegenerating} className={`px-3 py-1 text-xs rounded-full transition-colors font-medium border ${activeTone === tone ? 'bg-[#F1F5F9] text-[#0B1220] border-[#F1F5F9]' : 'bg-transparent text-[#94A3B8] border-white/10 hover:border-white/20'}`}>{tone}</button>
+                 ))}
+              </div>
+           )}
+        </div>
+        
+        <div className="flex items-center gap-2">
+          {showTranslate && !translatedText && (
+             <button onClick={handleTranslate} disabled={isTranslating} className="px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider bg-white/5 hover:bg-white/10 text-[#94A3B8] hover:text-[#F1F5F9] rounded border border-white/10 transition-colors flex items-center gap-1.5">
+                {isTranslating ? <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> : 'Translate'}
+             </button>
           )}
-        </button>
+          <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={handleCopy} disabled={isRegenerating} className="text-[#94A3B8] hover:text-[#F1F5F9] rounded-lg p-1.5 transition-colors flex items-center justify-center w-8 h-8 relative group shrink-0" title="Copy to clipboard">
+            {copied ? <motion.svg initial={{ scale: 0 }} animate={{ scale: 1 }} className="w-4 h-4 text-emerald-400 absolute" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M5 13l4 4L19 7" /></motion.svg> : <svg className="w-4 h-4 absolute" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 16H6a2 2 0 01-2-2V6a2 2 0 012-2h8a2 2 0 002-2v-8a2 2 0 00-2-2h-8a2 2 0 00-2 2v8a2 2 0 002 2z" /></svg>}
+          </motion.button>
+        </div>
       </div>
-      <div className={`flex-1 ${contentStyles} ${scrollable ? 'max-h-96 overflow-y-auto pr-4 custom-scrollbar' : ''}`}>
+      <div className={`flex-1 ${contentStyles} ${scrollable ? 'max-h-80 overflow-y-auto pr-3 custom-scrollbar' : ''} ${variant === 'reply' ? 'mt-2' : ''}`}>
         {renderContent()}
       </div>
-    </div>
+    </motion.div>
   );
+}
+
+function CheckIcon() {
+  return <div className="shrink-0 w-4 h-4 flex items-center justify-center rounded-full bg-white/10"><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg></div>;
 }
