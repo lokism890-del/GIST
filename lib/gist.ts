@@ -38,9 +38,13 @@ export async function summarizeAudio(file: Blob & { name?: string }, tier: 'FREE
 
   // --- STRICT SERVER-SIDE ENTITLEMENT ENFORCEMENT ---
   let systemPrompt = "";
+  
+  // The explicitly supported languages string to prime the AI
+  const supportedLanguages = "English, Spanish, Mandarin, Hindi, Arabic, French, Bengali, Portuguese, Russian, Indonesian, Urdu, German, Japanese, Turkish, Vietnamese, Punjabi, Tamil, Persian, Korean, Italian.";
 
   if (tier === 'PRO') {
     systemPrompt =
+      `You support the following languages: ${supportedLanguages} ` +
       "You summarize voice note transcripts for a personal assistant app. Respond in the SAME language as the transcript. " +
       "Return strict JSON with exactly four fields:\n\n" +
       `"summary" — ONE sharp, specific sentence capturing what the voice note was actually about.\n\n` +
@@ -51,6 +55,7 @@ export async function summarizeAudio(file: Blob & { name?: string }, tier: 'FREE
   } else {
     // FREE TIER PROMPT: Only generates the Gist. Cheaper, faster, and perfectly secure.
     systemPrompt =
+      `You support the following languages: ${supportedLanguages} ` +
       "You summarize voice note transcripts for a personal assistant app. Respond in the SAME language as the transcript. " +
       "Return strict JSON with exactly ONE field:\n\n" +
       `"summary" — ONE sharp, specific sentence capturing what the voice note was actually about.\n\n` +
@@ -123,7 +128,7 @@ export async function translateAudioToEnglish(file: Blob & { name?: string }): P
 const LANGUAGE_NAMES: Record<string, string> = {
   en: "English", ur: "Urdu", hi: "Hindi", ar: "Arabic", ru: "Russian", es: "Spanish", fr: "French", de: "German", zh: "Chinese", ja: "Japanese",
   ko: "Korean", pt: "Portuguese", tr: "Turkish", fa: "Persian", bn: "Bengali", pa: "Punjabi", ps: "Pashto", id: "Indonesian", it: "Italian", nl: "Dutch",
-  pl: "Polish", uk: "Ukrainian", vi: "Vietnamese", th: "Thai", sw: "Swahili",
+  pl: "Polish", uk: "Ukrainian", vi: "Vietnamese", th: "Thai", sw: "Swahili", ta: "Tamil",
 };
 
 export function languageName(code: string | null): string | null {

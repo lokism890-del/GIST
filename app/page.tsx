@@ -2,6 +2,7 @@
 
 import React, { useState, useRef, useEffect, ChangeEvent, DragEvent } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
+import { createBrowserClient } from '@supabase/ssr';
 
 interface SummarizeResult {
   summary?: string;
@@ -29,6 +30,17 @@ const bgTextReveal = { hidden: { opacity: 0, y: 50, scale: 0.98 }, show: { opaci
 const fadeUpBlur = { hidden: { opacity: 0, y: 20, filter: "blur(6px)" }, show: { opacity: 1, y: 0, filter: "blur(0px)", transition: { duration: 0.5, ease: snappyEase } } };
 
 export default function Page() {
+  const [supabase] = useState(() => createBrowserClient(
+    process.env.NEXT_PUBLIC_SUPABASE_URL!,
+    process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
+  ));
+
+  const [user, setUser] = useState<any>(null);
+  const [justVerified, setJustVerified] = useState(false);
+  
+  // Track previous session state to prevent loop on tab switch
+  const prevUserRef = useRef<any>(null);
+
   const [isDarkMode, setIsDarkMode] = useState(true);
   const [isRecording, setIsRecording] = useState(false);
   const [isProcessing, setIsProcessing] = useState(false);
@@ -58,6 +70,29 @@ export default function Page() {
   const bgRef = useRef<HTMLDivElement>(null);
   
   const prefersReducedMotion = useReducedMotion();
+
+  // Bulletproof Auth Listener
+  useEffect(() => {
+    supabase.auth.getSession().then(({ data: { session } }) => {
+      const currentUser = session?.user || null;
+      prevUserRef.current = currentUser;
+      setUser(currentUser);
+    });
+
+    const { data: { subscription } } = supabase.auth.onAuthStateChange((event, session) => {
+      const currentUser = session?.user || null;
+      setUser(currentUser);
+
+      if (event === 'SIGNED_IN' && !prevUserRef.current && currentUser) {
+        setJustVerified(true);
+        setTimeout(() => setJustVerified(false), 2000); 
+      }
+      
+      prevUserRef.current = currentUser;
+    });
+
+    return () => subscription.unsubscribe();
+  }, [supabase]);
 
   useEffect(() => {
     const storedTheme = localStorage.getItem('gist_theme');
@@ -92,11 +127,24 @@ export default function Page() {
   }, [isDarkMode]);
 
   useEffect(() => {
-    fetch('/api/user/entitlements')
-      .then(res => res.ok ? res.json() : { tier: 'FREE', usageCount: 0, usageLimit: 5 })
-      .then(data => { if (data && typeof data.usageCount === 'number') setEntitlements(data); })
-      .catch(() => setEntitlements({ tier: 'FREE', usageCount: 0, usageLimit: 5 }));
-  }, []);
+    // 1. Check local storage for anonymous users
+    const localUsage = parseInt(localStorage.getItem('gist_free_usage') || '0', 10);
+
+    if (user) {
+      // 2. If logged in, fetch from the database
+      fetch('/api/user/entitlements')
+        .then(res => res.ok ? res.json() : null)
+        .then(data => { 
+          if (data && typeof data.usageCount === 'number') {
+            setEntitlements(data); 
+          }
+        })
+        .catch(() => setEntitlements({ tier: 'FREE', usageCount: localUsage, usageLimit: 5 }));
+    } else {
+      // 3. If NOT logged in, use the browser's local memory
+      setEntitlements({ tier: 'FREE', usageCount: localUsage, usageLimit: 5 });
+    }
+  }, [user]); // This re-runs automatically when someone logs in or out
 
   useEffect(() => {
     const sectionObserver = new IntersectionObserver((entries) => {
@@ -186,7 +234,7 @@ export default function Page() {
     
     try {
       const formData = new FormData();
-      formData.append('audio', isFile ? audioData : new File([audioData], 'recording.webm'));
+      formData.append('file', isFile ? audioData : new File([audioData], 'recording.webm'));
 
       const [response] = await Promise.all([
         fetch('/api/summarize', { method: 'POST', body: formData }),
@@ -201,8 +249,19 @@ export default function Page() {
       const data: SummarizeResult = await response.json();
       setProcessingStageIndex(PROCESSING_STAGES.length - 1);
       setTimeout(() => {
-        setResults(data); setIsProcessing(false);
-        if (entitlements.tier === 'FREE') setEntitlements(prev => ({ ...prev, usageCount: Math.min(prev.usageLimit, prev.usageCount + 1) }));
+        setResults(data); 
+        setIsProcessing(false);
+        
+        // Increase the usage count and save it locally if anonymous
+        if (entitlements.tier === 'FREE') {
+          setEntitlements(prev => {
+            const newCount = Math.min(prev.usageLimit, prev.usageCount + 1);
+            if (!user) {
+              localStorage.setItem('gist_free_usage', newCount.toString());
+            }
+            return { ...prev, usageCount: newCount };
+          });
+        }
       }, 250);
     } catch (err: any) {
       setError(err.message || 'An error occurred while processing your audio.');
@@ -285,6 +344,38 @@ export default function Page() {
   return (
     <div className={`min-h-screen font-sans flex flex-col overflow-x-hidden relative ${isDarkMode ? 'text-[#F1F5F9] selection:bg-[#1E293B]/50' : 'text-[#1D1D1F] selection:bg-emerald-500/30'}`}>
       
+      {/* VERIFIED OVERLAY */}
+      <AnimatePresence>
+        {justVerified && (
+          <motion.div
+            initial={{ opacity: 0 }}
+            animate={{ opacity: 1 }}
+            exit={{ opacity: 0 }}
+            className={`fixed inset-0 z-100 flex items-center justify-center backdrop-blur-md ${isDarkMode ? 'bg-[#0B0F18]/80' : 'bg-white/80'}`}
+          >
+            <motion.div
+              initial={{ scale: 0.9, y: 20 }}
+              animate={{ scale: 1, y: 0 }}
+              exit={{ scale: 0.9, y: -20 }}
+              className={`p-10 rounded-3xl shadow-2xl flex flex-col items-center text-center ${isDarkMode ? 'bg-[#12151C] border border-white/10' : 'bg-white border border-black/10'}`}
+            >
+              <div className="w-20 h-20 rounded-full bg-emerald-500/10 flex items-center justify-center mb-6 relative">
+                <motion.div
+                  initial={{ scale: 0 }} animate={{ scale: 1 }} transition={{ type: 'spring', delay: 0.2 }}
+                  className="w-12 h-12 bg-emerald-500 rounded-full flex items-center justify-center shadow-[0_0_20px_rgba(16,185,129,0.4)]"
+                >
+                  <svg className="w-6 h-6 text-white" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M5 13l4 4L19 7" /></svg>
+                </motion.div>
+              </div>
+              <h2 className={`text-2xl font-bold mb-2 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>Verified!</h2>
+              <p className={`text-sm ${isDarkMode ? 'text-gray-400' : 'text-gray-500'}`}>
+                Proceeding to your dashboard...
+              </p>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
+
       {/* PERFORMANCE OPTIMIZED GPU BACKGROUND ARCHITECTURE */}
       <div className="fixed inset-0 -z-20 bg-[#F5F5F7]" />
       
@@ -345,9 +436,9 @@ export default function Page() {
           </nav>
           
           {/* RIGHT ACTION CLUSTER */}
-          <div className="flex flex-1 items-center justify-end gap-6 sm:gap-7">
+          <div className="flex flex-1 items-center justify-end gap-3 sm:gap-5">
             
-            {/* PREMIUM PILL THEME TOGGLE (Canonical Values Used) */}
+            {/* PREMIUM PILL THEME TOGGLE */}
             <button
               onClick={handleThemeToggle}
               className={`relative flex items-center h-6.5 w-13 shrink-0 cursor-pointer rounded-full transition-all duration-300 ease-in-out focus:outline-none overflow-hidden shadow-inner ${
@@ -374,51 +465,106 @@ export default function Page() {
               </span>
             </button>
 
-            {entitlements.tier === 'PRO' ? (
-              <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className={`relative flex items-center gap-2 px-3 py-1.5 rounded-full border text-[10px] font-bold uppercase tracking-widest shadow-sm ${isDarkMode ? 'bg-[#0B0F18] border-emerald-500/30 text-emerald-400' : 'bg-emerald-50 border-emerald-200 text-emerald-600'}`}>
-                <span className={`w-1.5 h-1.5 rounded-full animate-pulse ${isDarkMode ? 'bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.5)]' : 'bg-emerald-500'}`} /><span>Pro Active</span>
-              </motion.div>
-            ) : (
-              <div className="flex items-center gap-4 sm:gap-5">
-                {/* QUIET FREE TIER INDICATOR */}
-                <div className={`hidden sm:flex items-center px-3 py-1.5 rounded-full border text-[10px] font-semibold tracking-widest ${isDarkMode ? 'bg-white/5 border-white/5 text-slate-400' : 'bg-gray-50 border-black/5 text-gray-500'}`}>
-                  FREE &middot; <strong className={`ml-1 ${isDarkMode ? 'text-white' : 'text-[#1D1D1F]'}`}>{remainingFreeUses}/5 LEFT</strong>
+            {/* HEADER AUTHENTICATION & TIERS - STRICTLY SIGN OUT ONLY IF LOGGED IN */}
+            <div className={`hidden sm:flex items-center gap-3 pl-3 border-l transition-colors duration-200 ${isDarkMode ? 'border-white/10' : 'border-black/10'}`}>
+              
+              {entitlements.tier === 'PRO' ? (
+                <motion.div initial={{ opacity: 0, scale: 0.9 }} animate={{ opacity: 1, scale: 1 }} className={`relative flex items-center gap-2 px-3 py-1.5 rounded-full border text-[10px] font-bold uppercase tracking-widest shadow-sm ${isDarkMode ? 'bg-[#0B0F18] border-emerald-500/30 text-emerald-400' : 'bg-emerald-50 border-emerald-200 text-emerald-600'}`}>
+                  <span className={`w-1.5 h-1.5 rounded-full animate-pulse ${isDarkMode ? 'bg-emerald-400 shadow-[0_0_6px_rgba(52,211,153,0.5)]' : 'bg-emerald-500'}`} /><span>Pro Active</span>
+                </motion.div>
+              ) : (
+                <div className="flex items-center gap-3">
+                  <div className={`hidden md:flex items-center px-3 py-1.5 rounded-full border text-[10px] font-semibold tracking-widest ${isDarkMode ? 'bg-white/5 border-white/5 text-slate-400' : 'bg-gray-50 border-black/5 text-gray-500'}`}>
+                    FREE &middot; <strong className={`ml-1 ${isDarkMode ? 'text-white' : 'text-[#1D1D1F]'}`}>{remainingFreeUses}/5 LEFT</strong>
+                  </div>
+                  
+                  <form action="/api/checkout" method="POST">
+                    <input type="hidden" name="plan" value="pro" />
+                    <motion.button 
+                      whileHover={{ y: -1 }} 
+                      whileTap={{ scale: 0.97 }} 
+                      transition={buttonSpring} 
+                      type="submit" 
+                      className={`relative overflow-hidden flex items-center gap-2 px-5 py-2.5 rounded-full text-[10px] font-bold uppercase tracking-widest transition-shadow ${
+                        isDarkMode 
+                          ? 'bg-[#F8FAFC] text-[#0B0F18] shadow-[0_0_20px_rgba(255,255,255,0.1),inset_0_-2px_4px_rgba(0,0,0,0.1)] hover:shadow-[0_0_30px_rgba(255,255,255,0.2)]' 
+                          : 'bg-[#1D1D1F] text-white shadow-[0_8px_20px_rgba(0,0,0,0.15),inset_0_1px_1px_rgba(255,255,255,0.15)] hover:shadow-[0_12px_25px_rgba(0,0,0,0.2)]'
+                      }`}
+                    >
+                      <span className={isDarkMode ? "text-emerald-600" : "text-amber-400"}>✦</span> 
+                      <span>Upgrade</span>
+                      <motion.div 
+                        animate={{ x: ['-100%', '200%'] }} 
+                        transition={{ duration: 2.5, repeat: Infinity, ease: "easeInOut", repeatDelay: 1 }} 
+                        className="absolute top-0 bottom-0 w-1/2 bg-linear-to-r from-transparent via-white/20 to-transparent skew-x-12 pointer-events-none" 
+                      />
+                    </motion.button>
+                  </form>
                 </div>
-                
-                {/* SHIMMERING UPGRADE BUTTON */}
-                <form action="/api/checkout" method="POST">
-                  <input type="hidden" name="plan" value="pro" />
-                  <motion.button 
-                    whileHover={{ y: -1 }} 
-                    whileTap={{ scale: 0.97 }} 
-                    transition={buttonSpring} 
-                    type="submit" 
-                    className={`relative overflow-hidden flex items-center gap-2 px-5 py-2.5 rounded-full text-[10px] font-bold uppercase tracking-widest transition-shadow ${
-                      isDarkMode 
-                        ? 'bg-[#F8FAFC] text-[#0B0F18] shadow-[0_0_20px_rgba(255,255,255,0.1),inset_0_-2px_4px_rgba(0,0,0,0.1)] hover:shadow-[0_0_30px_rgba(255,255,255,0.2)]' 
-                        : 'bg-[#1D1D1F] text-white shadow-[0_8px_20px_rgba(0,0,0,0.15),inset_0_1px_1px_rgba(255,255,255,0.15)] hover:shadow-[0_12px_25px_rgba(0,0,0,0.2)]'
-                    }`}
-                  >
-                    <span className={isDarkMode ? "text-emerald-600" : "text-amber-400"}>✦</span> 
-                    <span>Upgrade to Pro</span>
-                    <span className="opacity-60 ml-0.5">&rarr;</span>
-                    
-                    {/* Animated Shimmer */}
-                    <motion.div 
-                      animate={{ x: ['-100%', '200%'] }} 
-                      transition={{ duration: 2.5, repeat: Infinity, ease: "easeInOut", repeatDelay: 1 }} 
-                      className="absolute top-0 bottom-0 w-1/2 bg-linear-to-r from-transparent via-white/20 to-transparent skew-x-12 pointer-events-none" 
-                    />
-                  </motion.button>
-                </form>
-              </div>
-            )}
-          </div>
+              )}
 
+              {/* Show Sign Out ONLY when logged in */}
+              {user && (
+                <button
+                  onClick={async () => {
+                    await supabase.auth.signOut();
+                    setUser(null);
+                  }}
+                  className={`text-[10px] font-bold uppercase tracking-widest transition-colors px-4 py-1.5 rounded-full border ${
+                    isDarkMode ? 'bg-white/10 text-white border-white/5 hover:bg-white/20' : 'bg-black/5 text-black border-black/5 hover:bg-black/10'
+                  }`}
+                >
+                  Sign out
+                </button>
+              )}
+            </div>
+
+          </div>
         </div>
       </motion.header>
 
       <main id="home" className="relative flex-1 w-full max-w-4xl mx-auto pt-36 pb-24 px-5 sm:px-8 flex flex-col items-center justify-center min-h-screen">
+        
+        {/* SLEEK FLOATING ACTION BUTTONS (Right Center) - Shown ONLY when NOT signed in */}
+     {/* SLEEK FLOATING ACTION BUTTONS (Right Center) - Shown ONLY when NOT signed in */}
+        {!user && (
+          <motion.div
+            initial={{ opacity: 0, x: 50 }}
+            animate={{ opacity: 1, x: 0 }}
+            transition={{ delay: 0.5, type: 'spring', damping: 20 }}
+            className="fixed right-4 sm:right-8 md:right-12 top-1/2 -translate-y-1/2 hidden sm:flex flex-col gap-4 z-40"
+          >
+            {/* Primary Action: Sign Up */}
+            <div className="relative group">
+              {/* Vibrant ambient glow acting like a light source behind the glass */}
+              <div className={`absolute -inset-1 blur-xl rounded-2xl pointer-events-none transition-opacity duration-500 opacity-30 group-hover:opacity-60 ${isDarkMode ? 'bg-emerald-500' : 'bg-emerald-400'}`} />
+              
+              <a
+                href="/auth?mode=signup"
+                className={`relative flex items-center justify-center px-6 py-4 rounded-2xl text-[11px] font-bold uppercase tracking-widest text-center transition-all duration-300 outline-none ${
+                  isDarkMode 
+                    ? 'bg-linear-to-b from-white/10 to-white/5 backdrop-blur-xl text-white shadow-[0_8px_32px_rgba(0,0,0,0.4),inset_0_1px_1px_rgba(255,255,255,0.2)] hover:from-white/15 hover:to-white/10 hover:shadow-[0_8px_32px_rgba(16,185,129,0.2),inset_0_1px_1px_rgba(255,255,255,0.3)] hover:scale-105 active:scale-95' 
+                    : 'bg-linear-to-b from-white/60 to-white/30 backdrop-blur-xl text-gray-900 shadow-[0_8px_32px_rgba(0,0,0,0.1),inset_0_1px_1px_rgba(255,255,255,0.8)] hover:from-white/80 hover:to-white/50 hover:shadow-[0_8px_32px_rgba(16,185,129,0.15),inset_0_1px_1px_rgba(255,255,255,1)] hover:scale-105 active:scale-95'
+                }`}
+              >
+                Sign up free
+              </a>
+            </div>
+            
+            {/* Secondary Action: Log In */}
+            <a
+              href="/auth?mode=login"
+              className={`relative px-6 py-4 rounded-2xl text-[11px] font-bold uppercase tracking-widest text-center transition-all duration-300 outline-none ${
+                isDarkMode 
+                  ? 'bg-white/5 backdrop-blur-md text-[#94A3B8] hover:text-white hover:bg-white/10 shadow-[0_8px_32px_rgba(0,0,0,0.3),inset_0_1px_0_rgba(255,255,255,0.05)] hover:shadow-[0_8px_32px_rgba(0,0,0,0.4),inset_0_1px_0_rgba(255,255,255,0.1)] hover:scale-105 active:scale-95' 
+                  : 'bg-white/20 backdrop-blur-md text-gray-600 hover:text-gray-900 hover:bg-white/40 shadow-[0_8px_32px_rgba(0,0,0,0.05),inset_0_1px_0_rgba(255,255,255,0.4)] hover:shadow-[0_8px_32px_rgba(0,0,0,0.08),inset_0_1px_0_rgba(255,255,255,0.6)] hover:scale-105 active:scale-95'
+              }`}
+            >
+              Log in
+            </a>
+          </motion.div>
+        )}
+
         <AnimatePresence>
           {error && !isProcessing && (
             <motion.div initial={{ opacity: 0, y: -10, scale: 0.98 }} animate={{ opacity: 1, y: 0, scale: 1 }} exit={{ opacity: 0, y: -10, scale: 0.98 }} className="absolute top-28 w-full max-w-md p-4 bg-red-950/40 backdrop-blur-md border border-red-500/40 text-white text-xs rounded-xl flex items-center justify-between shadow-lg z-20">
@@ -715,7 +861,7 @@ export default function Page() {
               {entitlements.tier === 'PRO' && <span className={`px-2.5 py-0.5 rounded-full border text-[10px] font-bold ${isDarkMode ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' : 'bg-emerald-50 border-emerald-200 text-emerald-600'}`}>Active</span>}
             </div>
             <div className="flex items-end gap-1 mb-8 relative z-10">
-              <h3 className={`text-4xl font-bold tracking-tight ${isDarkMode ? 'text-[#F1F5F9]' : 'text-[#1D1D1F]'}`}>$9.99</h3>
+              <h3 className={`text-4xl font-bold tracking-tight ${isDarkMode ? 'text-[#F1F5F9]' : 'text-[#1D1D1F]'}`}>$4.99</h3>
               <span className={`mb-1 text-sm font-medium ${isDarkMode ? 'text-[#94A3B8]' : 'text-[#86868B]'}`}>/month</span>
             </div>
             <ul className={`flex flex-col gap-3.5 mb-10 grow text-xs relative z-10 ${isDarkMode ? 'text-[#94A3B8]' : 'text-[#86868B]'}`}>
@@ -980,4 +1126,4 @@ function ResultCard({ title, content, variant, fullWidth = false, isPrimary = fa
 
 function CheckIcon({ isDarkMode }: { isDarkMode: boolean }) {
   return <div className={`shrink-0 w-4 h-4 flex items-center justify-center rounded-full border ${isDarkMode ? 'bg-white/5 border-white/10' : 'bg-black/5 border-black/10'}`}><svg width="8" height="8" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="3.5" strokeLinecap="round" strokeLinejoin="round"><polyline points="20 6 9 17 4 12"></polyline></svg></div>;
-} 
+}

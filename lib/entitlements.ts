@@ -1,4 +1,6 @@
-import { db } from './db'; // Your database instance (Prisma, Drizzle, etc.)
+// File path: /lib/entitlements.ts
+
+import { db } from './db'; 
 
 export async function getUserEntitlements(userId: string) {
   // 1. Fetch User and Polar Subscription Data
@@ -26,6 +28,6 @@ export async function getUserEntitlements(userId: string) {
   return {
     tier: isPro ? 'PRO' : 'FREE',
     usageCount,
-    usageLimit: 5 // Define your free limit here
+    usageLimit: 5 
   };
 }
