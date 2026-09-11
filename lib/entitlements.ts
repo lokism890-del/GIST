@@ -1,36 +1,43 @@
 import { createClient } from '@supabase/supabase-js';
 
 export async function getUserEntitlements(userId: string) {
-  // 1. Connect directly to Supabase using the Service Role to bypass row-level security
   const supabase = createClient(
     process.env.NEXT_PUBLIC_SUPABASE_URL!,
     process.env.SUPABASE_SERVICE_ROLE_KEY!
   );
 
-  // 2. Fetch the real Tier updated by your Paddle Webhook
-  const { data: entitlement } = await supabase
+  // 1. Fetch the tier from user_entitlements
+  const { data: entitlement, error: entError } = await supabase
     .from('user_entitlements')
     .select('tier')
     .eq('user_id', userId)
     .single();
 
+  if (entError) {
+    console.error("Entitlement fetch error:", entError);
+  }
+
   const tier = entitlement?.tier || 'FREE';
   const isPro = tier === 'PRO';
 
-  // 3. Count real usage for the current month from Supabase
+  // 2. Count usage using the exact 'voice_notes' table name and 'user_id' column
   const startOfMonth = new Date();
   startOfMonth.setDate(1);
   startOfMonth.setHours(0, 0, 0, 0);
 
-  const { count } = await supabase
-    .from('VoiceNote') // IMPORTANT: Change this if your Supabase table is named differently (e.g., 'voice_notes')
+  const { count, error: countError } = await supabase
+    .from('voice_notes') 
     .select('*', { count: 'exact', head: true })
-    .eq('userId', userId) // IMPORTANT: Change to 'user_id' if that is your column name
-    .gte('createdAt', startOfMonth.toISOString()); // IMPORTANT: Change to 'created_at' if needed
+    .eq('user_id', userId) 
+    .gte('created_at', startOfMonth.toISOString()); 
+
+  if (countError) {
+    console.error("Voice notes count error:", countError);
+  }
 
   return {
     tier: tier,
     usageCount: count || 0,
-    usageLimit: isPro ? 100 : 5 // Pro users get 100, Free users get 5
+    usageLimit: isPro ? 100 : 5
   };
 }
