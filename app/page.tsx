@@ -79,7 +79,7 @@ export default function Page() {
     if (!cleanToken) return;
 
     initializePaddle({
-      environment: 'sandbox', 
+      environment: (process.env.NEXT_PUBLIC_PADDLE_ENV as 'sandbox' | 'production') || 'sandbox',
       token: cleanToken,
       eventCallback: (event) => {
         if (event.name === 'checkout.completed') {
@@ -1027,7 +1027,7 @@ function ProfileDropdown({ user, isDarkMode, onSignOut }: { user: any, isDarkMod
         className="group relative flex items-center justify-center w-8 h-8 focus:outline-none ml-2"
         aria-label="User menu"
       >
-        <div className={`absolute inset-0 border transition-all duration-300 rounded-[8px] transform rotate-45 group-hover:shadow-[0_0_12px_rgba(34,211,238,0.25)] ${
+        <div className={`absolute inset-0 border transition-all duration-300 rounded-lg transform rotate-45 group-hover:shadow-[0_0_12px_rgba(34,211,238,0.25)] ${
           isOpen 
             ? isDarkMode ? 'border-cyan-500/50 shadow-[0_0_12px_rgba(34,211,238,0.25)] bg-[#0D1322]' : 'border-cyan-500/50 shadow-[0_0_12px_rgba(34,211,238,0.25)] bg-white'
             : isDarkMode ? 'border-[#1E293B] bg-[#0A111F] group-hover:border-cyan-500/40' : 'border-slate-200 bg-slate-50 group-hover:border-cyan-500/40'
