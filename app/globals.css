@@ -61,7 +61,6 @@ body {
   position: relative;
   color: var(--color-paper);
   font-family: var(--font-body);
-  min-height: 100vh;
   background-color: var(--color-ink);
   background-image: radial-gradient(
       circle at 8% 12%,
@@ -308,10 +307,8 @@ body {
   height: 6px;
   border-radius: 999px;
   background: rgba(255, 255, 255, 0.06);
-  overflow: hidden;
 }
 .progress-fill {
-  height: 100%;
   border-radius: 999px;
   background: linear-gradient(90deg, var(--color-signal), var(--color-signal-dim));
   transition: width 0.4s ease;
@@ -341,4 +338,19 @@ body {
   flex-wrap: wrap;
   gap: 8px 20px;
   justify-content: center;
+}
+html.lenis, html.lenis body {
+  height: auto;
+}
+.lenis.lenis-smooth {
+  scroll-behavior: auto !important;
+}
+.lenis.lenis-smooth [data-lenis-prevent] {
+  overscroll-behavior: contain;
+}
+.lenis.lenis-stopped {
+  overflow: hidden;
+}
+.lenis.lenis-scrolling iframe {
+  pointer-events: none;
 }

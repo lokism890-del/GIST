@@ -1,22 +1,50 @@
+export const dynamic = 'force-dynamic';
+export const revalidate = 0;
+
 import { NextResponse } from 'next/server';
-import { getUserEntitlements } from '@/lib/entitlements';
-import { getSession } from '@/lib/auth';
+import { createServerClient } from '@supabase/ssr';
+import { cookies } from 'next/headers';
 
 export async function GET() {
-  const session = await getSession();
-  if (!session?.user) return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-
   try {
-    // Comment out the real database call just for testing
-    // const entitlements = await getUserEntitlements(session.user.id);
-    
-    // Force the Free Trial state
+    const cookieStore = await cookies();
+
+    const supabase = createServerClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL!,
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!,
+      {
+        cookies: {
+          getAll() { return cookieStore.getAll(); },
+          setAll(cookiesToSet) {
+            try { cookiesToSet.forEach(({ name, value, options }) => cookieStore.set(name, value, options)); } catch {}
+          },
+        },
+      }
+    );
+
+    const { data: { user }, error: authError } = await supabase.auth.getUser();
+
+    if (authError || !user) {
+      return NextResponse.json({ tier: 'FREE', usageCount: 0, usageLimit: 5 });
+    }
+
+    // Querying the 'profiles' table using the user's ID
+    const { data, error: dbError } = await supabase
+      .from('profiles') 
+      .select('tier, usage_count')
+      .eq('id', user.id)
+      .maybeSingle();
+
+    if (dbError || !data) {
+      return NextResponse.json({ tier: 'FREE', usageCount: 0, usageLimit: 5 });
+    }
+
     return NextResponse.json({
-      tier: 'FREE',
-      usageCount: 0,
-      usageLimit: 5
+      tier: (data.tier || 'FREE').toUpperCase(),
+      usageCount: data.usage_count ?? 0,
+      usageLimit: data.tier?.toUpperCase() === 'PRO' ? 999999 : 5,
     });
-  } catch (error) {
-    return NextResponse.json({ error: 'Failed to fetch entitlements' }, { status: 500 });
+  } catch (err: any) {
+    return NextResponse.json({ tier: 'FREE', usageCount: 0, usageLimit: 5 });
   }
 }

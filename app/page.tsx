@@ -3,6 +3,7 @@
 import React, { useState, useRef, useEffect, ChangeEvent, DragEvent } from 'react';
 import { motion, AnimatePresence, useReducedMotion } from 'framer-motion';
 import { createBrowserClient } from '@supabase/ssr';
+import { initializePaddle, Paddle } from '@paddle/paddle-js';
 
 interface SummarizeResult {
   summary?: string;
@@ -21,7 +22,6 @@ interface UserEntitlements {
 
 const PROCESSING_STAGES = ["Recording complete", "Uploading", "Transcribing", "Understanding", "Preparing Intelligence"];
 
-const springTransition = { type: "spring" as const, stiffness: 350, damping: 26 };
 const snappyEase = [0.2, 0.8, 0.2, 1] as const;
 const buttonSpring = { type: "spring" as const, stiffness: 400, damping: 25 };
 const staggerContainer = { hidden: { opacity: 0 }, show: { opacity: 1, transition: { staggerChildren: 0.08, delayChildren: 0.05 } } };
@@ -35,10 +35,10 @@ export default function Page() {
     process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
   ));
 
+  const [paddle, setPaddle] = useState<Paddle | null>(null);
   const [user, setUser] = useState<any>(null);
   const [justVerified, setJustVerified] = useState(false);
   
-  // Track previous session state to prevent loop on tab switch
   const prevUserRef = useRef<any>(null);
 
   const [isDarkMode, setIsDarkMode] = useState(true);
@@ -71,7 +71,76 @@ export default function Page() {
   
   const prefersReducedMotion = useReducedMotion();
 
-  // Bulletproof Auth Listener
+  // Initialize Paddle.js with completed listener
+  useEffect(() => {
+    let rawToken = process.env.NEXT_PUBLIC_PADDLE_CLIENT_TOKEN || '';
+    const cleanToken = rawToken.replace(/['"]/g, '').trim();
+
+    if (!cleanToken) return;
+
+    initializePaddle({
+      environment: 'sandbox', 
+      token: cleanToken,
+      eventCallback: (event) => {
+        if (event.name === 'checkout.completed') {
+          setTimeout(() => {
+            fetch('/api/user/entitlements')
+              .then(res => res.ok ? res.json() : null)
+              .then(data => {
+                if (data && data.tier) setEntitlements(data);
+              })
+              .catch(console.error);
+          }, 1500);
+        }
+        if (event.name === 'checkout.error') {
+          console.error("🚨 PADDLE CHECKOUT ERROR:", event.data);
+        }
+      },
+      checkout: {
+        settings: {
+          displayMode: 'overlay',
+          theme: isDarkMode ? 'dark' : 'light',
+        },
+      },
+    }).then((paddleInstance) => {
+      if (paddleInstance) setPaddle(paddleInstance);
+    }).catch((err) => {
+      console.error('Failed to initialize Paddle:', err);
+    });
+  }, [isDarkMode]);
+
+  const handleUpgrade = () => {
+    if (!user?.id) {
+      window.location.href = '/auth?mode=signup';
+      return;
+    }
+
+    const rawPriceId = process.env.NEXT_PUBLIC_PADDLE_PRICE_ID || '';
+    const cleanPriceId = rawPriceId.replace(/['"]/g, '').trim();
+    
+    if (!cleanPriceId || !cleanPriceId.startsWith('pri_')) {
+      setError('Invalid Paddle Price ID. Make sure it starts with "pri_".');
+      return;
+    }
+
+    if (!paddle) {
+      setError('Payment gateway is initializing, please try again in a moment.');
+      return;
+    }
+
+    paddle.Checkout.open({
+      items: [
+        {
+          priceId: cleanPriceId,
+          quantity: 1,
+        }
+      ],
+      customData: {
+        supabase_user_id: String(user.id),
+      }
+    });
+  };
+  
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => {
       const currentUser = session?.user || null;
@@ -127,25 +196,26 @@ export default function Page() {
   }, [isDarkMode]);
 
   useEffect(() => {
-    // 1. Check local storage for anonymous users
     const localUsage = parseInt(localStorage.getItem('gist_free_usage') || '0', 10);
 
     if (user) {
-      // 2. If logged in, fetch from the database
       fetch('/api/user/entitlements')
-        .then(res => res.ok ? res.json() : null)
-        .then(data => { 
-          if (data && typeof data.usageCount === 'number') {
-            setEntitlements(data); 
+        .then((res) => (res.ok ? res.json() : null))
+        .then((data) => {
+          if (data && data.tier) {
+            setEntitlements({
+              tier: data.tier.toUpperCase() === 'PRO' ? 'PRO' : 'FREE',
+              usageCount: typeof data.usageCount === 'number' ? data.usageCount : 0,
+              usageLimit: data.tier.toUpperCase() === 'PRO' ? 999999 : (data.usageLimit || 5),
+            });
           }
         })
         .catch(() => setEntitlements({ tier: 'FREE', usageCount: localUsage, usageLimit: 5 }));
     } else {
-      // 3. If NOT logged in, use the browser's local memory
       setEntitlements({ tier: 'FREE', usageCount: localUsage, usageLimit: 5 });
     }
-  }, [user]); // This re-runs automatically when someone logs in or out
-
+  }, [user]);
+ 
   useEffect(() => {
     const sectionObserver = new IntersectionObserver((entries) => {
       entries.forEach(entry => { if (entry.isIntersecting) setActiveSection(entry.target.id); });
@@ -252,12 +322,16 @@ export default function Page() {
         setResults(data); 
         setIsProcessing(false);
         
-        // Increase the usage count and save it locally if anonymous
-        if (entitlements.tier === 'FREE') {
+    if (entitlements.tier === 'FREE') {
           setEntitlements(prev => {
             const newCount = Math.min(prev.usageLimit, prev.usageCount + 1);
-            if (!user) {
-              localStorage.setItem('gist_free_usage', newCount.toString());
+            localStorage.setItem('gist_free_usage', newCount.toString());
+            if (user) {
+              fetch('/api/user/usage', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ usageCount: newCount })
+              }).catch(console.error);
             }
             return { ...prev, usageCount: newCount };
           });
@@ -388,9 +462,9 @@ export default function Page() {
             <motion.div style={{ willChange: 'transform' }} animate={prefersReducedMotion ? {} : { x: ['-2%', '3%', '-2%'], y: ['-3%', '2%', '-3%'] }} transition={{ duration: 40, repeat: Infinity, ease: 'linear' }} className="absolute top-[-20%] -left-10 w-[120vw] h-[120vh] bg-[radial-gradient(ellipse_at_center,rgba(11,19,43,0.35)_0%,transparent_50%)]" />
             <motion.div style={{ willChange: 'transform' }} animate={prefersReducedMotion ? {} : { x: ['3%', '-2%', '3%'], y: ['2%', '-3%', '2%'] }} transition={{ duration: 45, repeat: Infinity, ease: 'linear' }} className="absolute top-10 -right-10 w-screen h-screen bg-[radial-gradient(ellipse_at_center,rgba(26,24,50,0.25)_0%,transparent_50%)]" />
             <motion.div style={{ willChange: 'transform' }} animate={prefersReducedMotion ? {} : { x: ['-1%', '2%', '-1%'], y: ['2%', '-1%', '2%'] }} transition={{ duration: 50, repeat: Infinity, ease: 'linear' }} className="absolute -bottom-10 left-[20%] w-screen h-screen bg-[radial-gradient(ellipse_at_center,rgba(42,38,51,0.2)_0%,transparent_50%)]" />
-            <svg className="absolute inset-0 w-full h-full opacity-[0.04] mix-blend-overlay pointer-events-none" xmlns="http://www.w3.org/2000/svg"><filter id="noiseFilter"><feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="3" stitchTiles="stitch" /></filter><rect width="100%" height="100%" filter="url(#noiseFilter)" /></svg>
+            <svg className="absolute inset-0 w-full h-full opacity-4 mix-blend-overlay pointer-events-none" xmlns="http://www.w3.org/2000/svg"><filter id="noiseFilter"><feTurbulence type="fractalNoise" baseFrequency="0.8" numOctaves="3" stitchTiles="stitch" /></filter><rect width="100%" height="100%" filter="url(#noiseFilter)" /></svg>
             <div className="absolute inset-0 bg-[radial-gradient(circle_at_center,transparent_0%,#0B0F18_130%)] pointer-events-none" />
-            <div ref={bgRef} className="absolute inset-0 opacity-[0.035] pointer-events-none" style={{ background: 'radial-gradient(600px circle at var(--mouse-x, 50%) var(--mouse-y, 50%), rgba(255,255,255,1), transparent 40%)' }} />
+            <div ref={bgRef} className="absolute inset-0 opacity-4 pointer-events-none" style={{ background: 'radial-gradient(600px circle at var(--mouse-x, 50%) var(--mouse-y, 50%), rgba(255,255,255,1), transparent 40%)' }} />
           </motion.div>
         )}
       </AnimatePresence>
@@ -400,11 +474,11 @@ export default function Page() {
         initial={{ opacity: 0, y: -20 }} 
         animate={{ opacity: 1, y: 0 }} 
         transition={{ duration: 0.6, ease: snappyEase }} 
-        className={`fixed top-3 left-1/2 -translate-x-1/2 w-[92%] max-w-350 z-50 rounded-2xl backdrop-blur-xl border transition-colors duration-300 shadow-sm ${
+        className={`fixed top-3 left-1/2 -translate-x-1/2 w-[96%] max-w-7xl z-50 rounded-2xl backdrop-blur-xl border transition-colors duration-300 shadow-sm ${
           isDarkMode ? 'bg-[#0B0F18]/85 border-white/10 shadow-[0_10px_40px_rgba(0,0,0,0.5)]' : 'bg-white/85 border-black/5 shadow-[0_8px_30px_rgba(0,0,0,0.06)]'
         }`}
       >
-        <div className="flex items-center justify-between px-5 py-3 relative">
+        <div className="flex items-center justify-between px-6 py-4 relative">
           
           {/* LOGO */}
           <div className="flex flex-1 items-center justify-start">
@@ -417,7 +491,7 @@ export default function Page() {
           </div>
           
           {/* CENTER NAVIGATION */}
-          <nav className={`hidden md:flex absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 items-center justify-center gap-8 text-[11px] font-bold uppercase tracking-widest transition-colors duration-300`}>
+          <nav className={`hidden lg:flex absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 items-center justify-center gap-8 text-[11px] font-bold uppercase tracking-widest transition-colors duration-300`}>
             {['home', 'features', 'faq', 'pricing'].map((id) => {
               const isActive = activeSection === id;
               return (
@@ -441,14 +515,14 @@ export default function Page() {
             {/* PREMIUM PILL THEME TOGGLE */}
             <button
               onClick={handleThemeToggle}
-              className={`relative flex items-center h-6.5 w-13 shrink-0 cursor-pointer rounded-full transition-all duration-300 ease-in-out focus:outline-none overflow-hidden shadow-inner ${
+              className={`relative flex items-center h-6 w-12 shrink-0 cursor-pointer rounded-full transition-all duration-300 ease-in-out focus:outline-none overflow-hidden shadow-inner ${
                 isDarkMode ? 'bg-[#0F172A] border border-white/5' : 'bg-[#E2E8F0] border border-black/5'
               }`}
               aria-label="Toggle Theme"
             >
               <span
-                className={`pointer-events-none absolute left-0.75 h-5 w-5 transform rounded-full shadow-[0_2px_5px_rgba(0,0,0,0.15)] transition-transform duration-500 ease-in-out flex items-center justify-center overflow-hidden z-10 bg-white ${
-                  isDarkMode ? 'translate-x-6.5' : 'translate-x-0'
+                className={`pointer-events-none absolute left-0.5 h-5 w-5 transform rounded-full shadow-[0_2px_5px_rgba(0,0,0,0.15)] transition-transform duration-500 ease-in-out flex items-center justify-center overflow-hidden z-10 bg-white ${
+                  isDarkMode ? 'translate-x-6' : 'translate-x-0'
                 }`}
               >
                 <AnimatePresence mode="wait">
@@ -465,7 +539,7 @@ export default function Page() {
               </span>
             </button>
 
-            {/* HEADER AUTHENTICATION & TIERS - STRICTLY SIGN OUT ONLY IF LOGGED IN */}
+            {/* HEADER AUTHENTICATION & TIERS */}
             <div className={`hidden sm:flex items-center gap-3 pl-3 border-l transition-colors duration-200 ${isDarkMode ? 'border-white/10' : 'border-black/10'}`}>
               
               {entitlements.tier === 'PRO' ? (
@@ -478,32 +552,29 @@ export default function Page() {
                     FREE &middot; <strong className={`ml-1 ${isDarkMode ? 'text-white' : 'text-[#1D1D1F]'}`}>{remainingFreeUses}/5 LEFT</strong>
                   </div>
                   
-                  <form action="/api/checkout" method="POST">
-                    <input type="hidden" name="plan" value="pro" />
-                    <motion.button 
-                      whileHover={{ y: -1 }} 
-                      whileTap={{ scale: 0.97 }} 
-                      transition={buttonSpring} 
-                      type="submit" 
-                      className={`relative overflow-hidden flex items-center gap-2 px-5 py-2.5 rounded-full text-[10px] font-bold uppercase tracking-widest transition-shadow ${
-                        isDarkMode 
-                          ? 'bg-[#F8FAFC] text-[#0B0F18] shadow-[0_0_20px_rgba(255,255,255,0.1),inset_0_-2px_4px_rgba(0,0,0,0.1)] hover:shadow-[0_0_30px_rgba(255,255,255,0.2)]' 
-                          : 'bg-[#1D1D1F] text-white shadow-[0_8px_20px_rgba(0,0,0,0.15),inset_0_1px_1px_rgba(255,255,255,0.15)] hover:shadow-[0_12px_25px_rgba(0,0,0,0.2)]'
-                      }`}
-                    >
-                      <span className={isDarkMode ? "text-emerald-600" : "text-amber-400"}>✦</span> 
-                      <span>Upgrade</span>
-                      <motion.div 
-                        animate={{ x: ['-100%', '200%'] }} 
-                        transition={{ duration: 2.5, repeat: Infinity, ease: "easeInOut", repeatDelay: 1 }} 
-                        className="absolute top-0 bottom-0 w-1/2 bg-linear-to-r from-transparent via-white/20 to-transparent skew-x-12 pointer-events-none" 
-                      />
-                    </motion.button>
-                  </form>
+                  <motion.button 
+                    whileHover={{ y: -1 }} 
+                    whileTap={{ scale: 0.97 }} 
+                    transition={buttonSpring} 
+                    type="button" 
+                    onClick={handleUpgrade}
+                    className={`relative overflow-hidden flex items-center gap-2 px-5 py-2.5 rounded-full text-[10px] font-bold uppercase tracking-widest transition-shadow ${
+                      isDarkMode 
+                        ? 'bg-[#F8FAFC] text-[#0B0F18] shadow-[0_0_20px_rgba(255,255,255,0.1),inset_0_-2px_4px_rgba(0,0,0,0.1)] hover:shadow-[0_0_30px_rgba(255,255,255,0.2)]' 
+                        : 'bg-[#1D1D1F] text-white shadow-[0_8px_20px_rgba(0,0,0,0.15),inset_0_1px_1px_rgba(255,255,255,0.15)] hover:shadow-[0_12px_25px_rgba(0,0,0,0.2)]'
+                    }`}
+                  >
+                    <span className={isDarkMode ? "text-emerald-600" : "text-amber-400"}>✦</span> 
+                    <span>Upgrade</span>
+                    <motion.div 
+                      animate={{ x: ['-100%', '200%'] }} 
+                      transition={{ duration: 2.5, repeat: Infinity, ease: "easeInOut", repeatDelay: 1 }} 
+                      className="absolute top-0 bottom-0 w-1/2 bg-linear-to-r from-transparent via-white/20 to-transparent skew-x-12 pointer-events-none" 
+                    />
+                  </motion.button>
                 </div>
               )}
 
-              {/* Show Sign Out ONLY when logged in */}
               {user && (
                 <button
                   onClick={async () => {
@@ -526,7 +597,6 @@ export default function Page() {
       <main id="home" className="relative flex-1 w-full max-w-4xl mx-auto pt-36 pb-24 px-5 sm:px-8 flex flex-col items-center justify-center min-h-screen">
         
         {/* SLEEK FLOATING ACTION BUTTONS (Right Center) - Shown ONLY when NOT signed in */}
-     {/* SLEEK FLOATING ACTION BUTTONS (Right Center) - Shown ONLY when NOT signed in */}
         {!user && (
           <motion.div
             initial={{ opacity: 0, x: 50 }}
@@ -534,9 +604,7 @@ export default function Page() {
             transition={{ delay: 0.5, type: 'spring', damping: 20 }}
             className="fixed right-4 sm:right-8 md:right-12 top-1/2 -translate-y-1/2 hidden sm:flex flex-col gap-4 z-40"
           >
-            {/* Primary Action: Sign Up */}
             <div className="relative group">
-              {/* Vibrant ambient glow acting like a light source behind the glass */}
               <div className={`absolute -inset-1 blur-xl rounded-2xl pointer-events-none transition-opacity duration-500 opacity-30 group-hover:opacity-60 ${isDarkMode ? 'bg-emerald-500' : 'bg-emerald-400'}`} />
               
               <a
@@ -551,7 +619,6 @@ export default function Page() {
               </a>
             </div>
             
-            {/* Secondary Action: Log In */}
             <a
               href="/auth?mode=login"
               className={`relative px-6 py-4 rounded-2xl text-[11px] font-bold uppercase tracking-widest text-center transition-all duration-300 outline-none ${
@@ -582,7 +649,7 @@ export default function Page() {
                 <motion.div 
                   initial={{ opacity: 0 }} animate={{ opacity: [0.15, 0.3, 0.15], scale: [0.9, 1.1, 0.9] }} exit={{ opacity: 0 }}
                   transition={{ duration: 8, repeat: Infinity, ease: "easeInOut" }}
-                  className="absolute top-1/4 left-1/2 -translate-x-1/2 w-125 h-125 bg-emerald-500/20 blur-[150px] rounded-full pointer-events-none z-[-1]" 
+                  className="absolute top-1/4 left-1/2 -translate-x-1/2 w-120 h-120 bg-emerald-500/20 blur-[150px] rounded-full pointer-events-none z-[-1]" 
                 />
               )}
             </AnimatePresence>
@@ -735,18 +802,15 @@ export default function Page() {
                 </>
               ) : (
                 <motion.div variants={fadeUp} className={`md:col-span-2 relative border rounded-3xl overflow-hidden ${isDarkMode ? 'border-white/5 bg-[#12151C]/20' : 'border-black/5 bg-white/40'}`}>
-                   <div className={`absolute inset-0 z-10 backdrop-blur-[6px] flex flex-col items-center justify-center text-center p-8 ${isDarkMode ? 'bg-[#0B0F18]/75' : 'bg-[#F5F5F7]/80'}`}>
+                   <div className={`absolute inset-0 z-10 backdrop-blur-xs flex flex-col items-center justify-center text-center p-8 ${isDarkMode ? 'bg-[#0B0F18]/75' : 'bg-[#F5F5F7]/80'}`}>
                       <div className="w-12 h-12 bg-emerald-500/5 text-emerald-500 rounded-full flex items-center justify-center mb-5 border border-emerald-500/20 shadow-lg">
                          <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" /></svg>
                       </div>
                       <h4 className={`text-xl font-bold mb-2 ${isDarkMode ? 'text-white' : 'text-[#1D1D1F]'}`}>Unlock Advanced Intelligence</h4>
                       <p className={`text-sm max-w-md mb-6 ${isDarkMode ? 'text-[#94A3B8]' : 'text-[#86868B]'}`}>Free tier includes your Gist and Transcript. Upgrade to Pro to unlock Key Points, Action Items, Smart Replies, and Translations.</p>
-                      <form action="/api/checkout" method="POST">
-                        <input type="hidden" name="plan" value="pro" />
-                        <button type="submit" className={`px-6 py-2.5 text-xs font-bold rounded-full transition-transform hover:scale-105 ${isDarkMode ? 'bg-white text-black shadow-[0_0_20px_rgba(255,255,255,0.15)]' : 'bg-[#1D1D1F] text-white shadow-md'}`}>Upgrade to Pro</button>
-                      </form>
+                      <button type="button" onClick={handleUpgrade} className={`px-6 py-2.5 text-xs font-bold rounded-full transition-transform hover:scale-105 ${isDarkMode ? 'bg-white text-black shadow-[0_0_20px_rgba(255,255,255,0.15)]' : 'bg-[#1D1D1F] text-white shadow-md'}`}>Upgrade to Pro</button>
                    </div>
-                   <div className="grid md:grid-cols-2 gap-4 opacity-30 pointer-events-none select-none blur-[2px] p-4">
+                   <div className="grid md:grid-cols-2 gap-4 opacity-30 pointer-events-none select-none blur-xs p-4">
                       <MockResultCard title="Key Points" isDarkMode={isDarkMode} /><MockResultCard title="Action Items" isDarkMode={isDarkMode} />
                       <div className="md:col-span-2"><MockResultCard title="Smart Reply Generator" isDarkMode={isDarkMode} /></div>
                    </div>
@@ -870,24 +934,22 @@ export default function Page() {
             {entitlements.tier === 'PRO' ? (
               <button type="button" disabled className={`w-full mt-auto py-3 rounded-full border font-bold text-xs cursor-default flex items-center justify-center gap-2 ${isDarkMode ? 'bg-emerald-500/10 border-emerald-500/30 text-emerald-400' : 'bg-emerald-50 border-emerald-200 text-emerald-600'}`}><span className={`w-1.5 h-1.5 rounded-full animate-pulse ${isDarkMode ? 'bg-emerald-400' : 'bg-emerald-500'}`} />Current Active Subscription</button>
             ) : (
-              <form action="/api/checkout" method="POST" className="mt-auto relative z-10">
-                <input type="hidden" name="plan" value="pro" />
-                <motion.button 
-                  whileHover={{ y: -1 }} 
-                  whileTap={{ scale: 0.97 }} 
-                  transition={buttonSpring} 
-                  type="submit" 
-                  className={`relative overflow-hidden w-full py-3 flex items-center justify-center gap-2 rounded-full font-bold text-[11px] uppercase tracking-widest transition-shadow ${
-                    isDarkMode 
-                      ? 'bg-[#F8FAFC] text-[#0B0F18] shadow-[0_0_20px_rgba(255,255,255,0.1),inset_0_-2px_4px_rgba(0,0,0,0.1)] hover:shadow-[0_0_30px_rgba(255,255,255,0.2)]' 
-                      : 'bg-[#1D1D1F] text-white shadow-[0_8px_20px_rgba(0,0,0,0.15),inset_0_1px_1px_rgba(255,255,255,0.15)] hover:shadow-[0_12px_25px_rgba(0,0,0,0.2)]'
-                  }`}
-                >
-                  <span className={isDarkMode ? "text-emerald-600" : "text-amber-400"}>✦</span> 
-                  Upgrade to Pro
-                  <motion.div animate={{ x: ['-100%', '200%'] }} transition={{ duration: 2.5, repeat: Infinity, ease: "easeInOut", repeatDelay: 1 }} className="absolute top-0 bottom-0 w-1/2 bg-linear-to-r from-transparent via-white/20 to-transparent skew-x-12 pointer-events-none" />
-                </motion.button>
-              </form>
+              <motion.button 
+                whileHover={{ y: -1 }} 
+                whileTap={{ scale: 0.97 }} 
+                transition={buttonSpring} 
+                type="button" 
+                onClick={handleUpgrade}
+                className={`relative overflow-hidden w-full py-3 flex items-center justify-center gap-2 rounded-full font-bold text-[11px] uppercase tracking-widest transition-shadow ${
+                  isDarkMode 
+                    ? 'bg-[#F8FAFC] text-[#0B0F18] shadow-[0_0_20px_rgba(255,255,255,0.1),inset_0_-2px_4px_rgba(0,0,0,0.1)] hover:shadow-[0_0_30px_rgba(255,255,255,0.2)]' 
+                    : 'bg-[#1D1D1F] text-white shadow-[0_8px_20px_rgba(0,0,0,0.15),inset_0_1px_1px_rgba(255,255,255,0.15)] hover:shadow-[0_12px_25px_rgba(0,0,0,0.2)]'
+                }`}
+              >
+                <span className={isDarkMode ? "text-emerald-600" : "text-amber-400"}>✦</span> 
+                Upgrade to Pro
+                <motion.div animate={{ x: ['-100%', '200%'] }} transition={{ duration: 2.5, repeat: Infinity, ease: "easeInOut", repeatDelay: 1 }} className="absolute top-0 bottom-0 w-1/2 bg-linear-to-r from-transparent via-white/20 to-transparent skew-x-12 pointer-events-none" />
+              </motion.button>
             )}
           </motion.div>
         </motion.div>
@@ -909,12 +971,12 @@ export default function Page() {
             <span className={`text-sm break-all transition-colors ${isDarkMode ? 'text-[#94A3B8] group-hover:text-[#F1F5F9]' : 'text-[#86868B] group-hover:text-[#1D1D1F]'}`}>nasir.ah.khan99<br/>@gmail.com</span>
           </motion.a>
 
-          <motion.a href="tel:03357333789" variants={fadeUp} className={`flex flex-col items-center text-center p-6 border rounded-2xl transition-all group shadow-sm hover:shadow-md ${isDarkMode ? 'bg-[#12151C] border-white/5 hover:border-white/10' : 'bg-white border-black/5 hover:border-black/10'}`}>
+          <motion.a href="tel:+92 335 7333789" variants={fadeUp} className={`flex flex-col items-center text-center p-6 border rounded-2xl transition-all group shadow-sm hover:shadow-md ${isDarkMode ? 'bg-[#12151C] border-white/5 hover:border-white/10' : 'bg-white border-black/5 hover:border-black/10'}`}>
             <div className={`w-10 h-10 rounded-full flex items-center justify-center mb-4 group-hover:scale-110 transition-transform ${isDarkMode ? 'bg-white/5 text-[#F1F5F9]' : 'bg-black/5 text-[#1D1D1F]'}`}>
               <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5a2 2 0 012-2h3.28a1 1 0 01.948.684l1.498 4.493a1 1 0 01-.502 1.21l-2.257 1.13a11.042 11.042 0 005.516 5.516l1.13-2.257a1 1 0 011.21-.502l4.493 1.498a1 1 0 01.684.949V19a2 2 0 01-2 2h-1C9.716 21 3 14.284 3 6V5z" /></svg>
             </div>
             <h4 className={`text-[11px] font-bold uppercase tracking-widest mb-1 ${isDarkMode ? 'text-[#F1F5F9]' : 'text-[#1D1D1F]'}`}>Phone</h4>
-            <span className={`text-sm transition-colors ${isDarkMode ? 'text-[#94A3B8] group-hover:text-[#F1F5F9]' : 'text-[#86868B] group-hover:text-[#1D1D1F]'}`}>03357333789</span>
+            <span className={`text-sm transition-colors ${isDarkMode ? 'text-[#94A3B8] group-hover:text-[#F1F5F9]' : 'text-[#86868B] group-hover:text-[#1D1D1F]'}`}>+92 335 7333789</span>
           </motion.a>
 
           <motion.div variants={fadeUp} className={`flex flex-col items-center text-center p-6 border rounded-2xl shadow-sm ${isDarkMode ? 'bg-[#12151C] border-white/5' : 'bg-white border-black/5'}`}>
@@ -1026,24 +1088,36 @@ function ResultCard({ title, content, variant, fullWidth = false, isPrimary = fa
   const [copied, setCopied] = useState(false);
   const [translatedText, setTranslatedText] = useState<string | null>(null);
   const [isTranslating, setIsTranslating] = useState(false);
+  const [isShowingTranslation, setIsShowingTranslation] = useState(false);
 
-  useEffect(() => { setTranslatedText(null); }, [activeTone, content]);
+  useEffect(() => { 
+    setTranslatedText(null); 
+    setIsShowingTranslation(false); 
+  }, [activeTone, content]);
 
   const rawStringContent = variant === 'reply' && typeof content === 'object' && content !== null && activeTone
     ? content[activeTone.toLowerCase()] || Object.values(content)[0] || ''
     : Array.isArray(content) ? content.join('\n') : String(content || '');
 
-  const displayContent = translatedText !== null ? translatedText : rawStringContent;
+  const displayContent = (isShowingTranslation && translatedText !== null) ? translatedText : rawStringContent;
 
   const handleCopy = () => {
     navigator.clipboard.writeText(displayContent); setCopied(true); setTimeout(() => setCopied(false), 2000);
   };
 
   const handleTranslate = async () => {
+    if (translatedText) {
+      setIsShowingTranslation(!isShowingTranslation);
+      return;
+    }
     setIsTranslating(true);
     try {
       const res = await fetch('/api/translate', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ text: rawStringContent }) });
-      if (res.ok) { const data = await res.json(); setTranslatedText(data.translation); }
+      if (res.ok) { 
+        const data = await res.json(); 
+        setTranslatedText(data.translation); 
+        setIsShowingTranslation(true); 
+      }
     } catch (e) { console.error(e); } finally { setIsTranslating(false); }
   };
 
@@ -1107,9 +1181,9 @@ function ResultCard({ title, content, variant, fullWidth = false, isPrimary = fa
         </div>
         
         <div className="flex items-center gap-2">
-          {showTranslate && !translatedText && (
+          {showTranslate && (
              <button onClick={handleTranslate} disabled={isTranslating} className={`px-2.5 py-1 text-[10px] font-bold uppercase tracking-wider rounded border transition-colors flex items-center gap-1.5 ${isDarkMode ? 'bg-white/5 hover:bg-white/10 text-[#94A3B8] hover:text-[#F1F5F9] border-white/10' : 'bg-black/5 hover:bg-black/10 text-[#86868B] hover:text-[#1D1D1F] border-black/5'}`}>
-                {isTranslating ? <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> : 'Translate'}
+                {isTranslating ? <svg className="w-3 h-3 animate-spin" fill="none" viewBox="0 0 24 24"><circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="3"></circle><path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z"></path></svg> : (isShowingTranslation ? 'Show Original' : 'Translate')}
              </button>
           )}
           <motion.button whileHover={{ scale: 1.1 }} whileTap={{ scale: 0.9 }} onClick={handleCopy} disabled={isRegenerating} className={`rounded-lg p-1.5 transition-colors flex items-center justify-center w-8 h-8 relative group shrink-0 ${isDarkMode ? 'text-[#94A3B8] hover:text-[#F1F5F9]' : 'text-[#86868B] hover:text-[#1D1D1F]'}`} title="Copy to clipboard">

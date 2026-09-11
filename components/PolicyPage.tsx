@@ -1,34 +1,35 @@
 import React from 'react';
-import Link from 'next/link';
 
-export default function PolicyPage({ title, children }: { title: string, children: React.ReactNode }) {
+// The addition of isDarkMode?: boolean; here fixes the TypeScript error permanently.
+interface PolicyPageProps {
+  title: string;
+  children: React.ReactNode;
+  isDarkMode?: boolean; 
+}
+
+export default function PolicyPage({ title, children, isDarkMode = true }: PolicyPageProps) {
   return (
-    <div className="min-h-screen bg-stone-50 text-stone-900 font-sans selection:bg-stone-200">
-      
-      {/* Sticky Legal Header */}
-      <header className="w-full px-6 py-4 border-b border-stone-200 bg-stone-50/80 backdrop-blur-md sticky top-0 z-50">
-        <div className="max-w-3xl mx-auto flex items-center justify-between">
-          <Link href="/" className="flex flex-col text-left hover:opacity-70 transition-opacity">
-            <span className="text-xl font-bold tracking-tight text-stone-900 leading-none">GIST</span>
-            <span className="text-[9px] font-bold tracking-[0.25em] text-stone-500 uppercase mt-1">
-              Voice Intelligence
-            </span>
-          </Link>
-          <Link href="/" className="text-sm font-medium text-stone-500 hover:text-stone-900 transition-colors flex items-center gap-1.5 active:scale-95">
-            <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
-            </svg>
-            Back to Home
-          </Link>
-        </div>
+    <div className={`min-h-screen font-sans selection:bg-emerald-500/30 ${isDarkMode ? 'bg-[#0B0F18] text-[#F1F5F9]' : 'bg-white text-[#1D1D1F]'}`}>
+      <header className={`py-6 px-8 flex justify-between items-center border-b ${isDarkMode ? 'border-white/10' : 'border-black/10'}`}>
+        <span className={`text-[10px] font-bold uppercase tracking-[0.2em] ${isDarkMode ? 'text-[#94A3B8]' : 'text-[#86868B]'}`}>
+          Voice Intelligence
+        </span>
+        <a 
+          href="/" 
+          className={`text-sm font-medium flex items-center gap-2 transition-colors ${isDarkMode ? 'text-[#F1F5F9] hover:text-emerald-400' : 'text-[#1D1D1F] hover:text-emerald-600'}`}
+        >
+          <svg className="w-4 h-4" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10 19l-7-7m0 0l7-7m-7 7h18" />
+          </svg>
+          Back to Home
+        </a>
       </header>
 
-      {/* Main Content Area */}
-      <main className="max-w-3xl mx-auto px-6 py-16 sm:py-24">
-        <h1 className="text-3xl sm:text-4xl font-bold tracking-tight text-stone-900 mb-12">{title}</h1>
-        <div className="text-stone-700 leading-relaxed">
-          {children}
-        </div>
+      <main className="max-w-3xl mx-auto py-16 px-6 sm:px-8">
+        <h1 className={`text-4xl font-bold tracking-tight mb-4 ${isDarkMode ? 'text-white' : 'text-gray-900'}`}>
+          {title}
+        </h1>
+        {children}
       </main>
     </div>
   );
