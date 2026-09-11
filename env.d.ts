@@ -8,5 +8,6 @@ declare namespace NodeJS {
     NEXT_PUBLIC_PADDLE_ENV: string;
     PADDLE_API_KEY: string;
     PADDLE_WEBHOOK_SECRET_KEY: string;
+    GROQ_API_KEY: string;
   }
 }
