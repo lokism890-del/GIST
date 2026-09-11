@@ -19,16 +19,25 @@ export default function AuthPage() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const handleEmailAuth = async (e: React.FormEvent) => {
+const handleEmailAuth = async (e: React.FormEvent) => {
     e.preventDefault();
     setIsLoading(true);
     setError(null);
 
     try {
       if (isSignUp) {
-        const { error } = await supabase.auth.signUp({ email, password });
+        const { data, error } = await supabase.auth.signUp({ email, password });
         if (error) throw error;
-        setError("Check your email for the confirmation link.");
+        
+        // Because Confirm Email is OFF, Supabase instantly creates a session.
+        // We catch it here and instantly drop them into the dashboard.
+        if (data.session) {
+          window.location.href = "/";
+        } else {
+          // Fallback just in case
+          setError("Account created! Please log in.");
+          setIsSignUp(false);
+        }
       } else {
         const { error } = await supabase.auth.signInWithPassword({ email, password });
         if (error) throw error;
