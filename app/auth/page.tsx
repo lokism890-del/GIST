@@ -72,12 +72,13 @@ const handleEmailAuth = async (e: React.FormEvent) => {
     }
   };
 
-  const handleGoogleAuth = async () => {
+ const handleGoogleAuth = async () => {
     try {
       const { error } = await supabase.auth.signInWithOAuth({
         provider: "google",
         options: {
-          redirectTo: `${window.location.origin}/auth/callback`,
+          // This tells Supabase to send Google back to our new route
+          redirectTo: `${window.location.origin}/auth/callback`, 
         },
       });
       if (error) throw error;
