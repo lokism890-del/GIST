@@ -76,3 +76,6 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ error: "Invalid signature" }, { status: 400 });
   }
 }
+export async function GET() {
+  return NextResponse.json({ message: "Paddle Webhook Endpoint is Live!" });
+}
