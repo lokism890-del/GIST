@@ -335,7 +335,7 @@ export default function AuthPage() {
                   />
                 ))}
               </div>
-              <span className="text-[11px] text-cyan-400 font-mono font-bold tracking-wide">0:42</span>
+              <span className="text-[11px] text-cyan-400 font-mono font-bold tracking-wide">0:55</span>
             </motion.div>
 
             {/* Step 2: Processing State */}

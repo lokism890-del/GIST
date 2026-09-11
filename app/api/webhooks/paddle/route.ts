@@ -1,46 +1,78 @@
-import { NextResponse } from 'next/server';
-import { createClient } from '@supabase/supabase-js';
+import { NextRequest, NextResponse } from "next/server";
+import { Paddle, Environment } from "@paddle/paddle-node-sdk";
+import { createClient } from "@supabase/supabase-js";
 
-export async function POST(req: Request) {
+// Initialize Paddle Server SDK
+const paddle = new Paddle(process.env.PADDLE_API_KEY || "", {
+  environment:
+    process.env.NEXT_PUBLIC_PADDLE_ENV === "production"
+      ? Environment.production
+      : Environment.sandbox,
+});
+
+// Initialize Supabase Admin (Bypasses RLS to update user entitlement)
+const supabaseAdmin = createClient(
+  process.env.NEXT_PUBLIC_SUPABASE_URL!,
+  process.env.SUPABASE_SERVICE_ROLE_KEY!
+);
+
+export async function POST(req: NextRequest) {
+  const signature = req.headers.get("paddle-signature");
+  const rawBody = await req.text();
+
+  if (!signature) {
+    return NextResponse.json({ error: "Missing signature" }, { status: 400 });
+  }
+
   try {
-    // 1. Initialize INSIDE the function to prevent Vercel build crashes
-    const supabaseUrl = process.env.NEXT_PUBLIC_SUPABASE_URL;
-    const supabaseKey = process.env.SUPABASE_SERVICE_ROLE_KEY;
+    // 1. Verify the signature with your Paddle secret key
+    const event = (await paddle.webhooks.unmarshal(
+      rawBody,
+      process.env.PADDLE_WEBHOOK_SECRET_KEY || "",
+      signature
+    )) as any;
 
-    if (!supabaseUrl || !supabaseKey) {
-      console.error("Missing Supabase environment variables.");
-      return NextResponse.json({ error: "Server configuration error" }, { status: 500 });
+    const eventType = event.eventType;
+    const customData = event.data?.customData || {};
+    const userId = customData.supabase_user_id;
+
+    // 2. Handle successful payment / subscription activation
+    if (
+      eventType === "transaction.completed" ||
+      eventType === "subscription.activated" ||
+      eventType === "subscription.created"
+    ) {
+      if (userId) {
+        // Update user tier in your Supabase database table
+        await supabaseAdmin
+          .from("user_entitlements")
+          .upsert({
+            user_id: userId,
+            tier: "PRO",
+            updated_at: new Date().toISOString(),
+          }, { onConflict: "user_id" });
+      }
     }
 
-    const supabaseAdmin = createClient(supabaseUrl, supabaseKey);
-
-    const rawBody = await req.text();
-    const event = JSON.parse(rawBody);
-
-    // 2. Listen for successful transactions
+    // 3. Handle cancellation or expiration
     if (
-      event.event_type === 'transaction.completed' || 
-      event.event_type === 'subscription.activated'
+      eventType === "subscription.canceled" ||
+      eventType === "subscription.past_due"
     ) {
-      const supabaseUserId = event.data?.custom_data?.supabase_user_id;
-
-      if (supabaseUserId) {
-        // 3. Update the specific user's tier in the profiles table
-        const { error } = await supabaseAdmin
-          .from('profiles')
-          .update({ tier: 'PRO' })
-          .eq('id', supabaseUserId);
-
-        if (error) {
-          console.error('Supabase update error:', error.message);
-          return NextResponse.json({ error: error.message }, { status: 500 });
-        }
+      if (userId) {
+        await supabaseAdmin
+          .from("user_entitlements")
+          .update({
+            tier: "FREE",
+            updated_at: new Date().toISOString(),
+          })
+          .eq("user_id", userId);
       }
     }
 
     return NextResponse.json({ received: true });
   } catch (err: any) {
-    console.error('Webhook error:', err.message);
-    return NextResponse.json({ error: 'Webhook processing failed' }, { status: 500 });
+    console.error("Paddle Webhook Error:", err.message);
+    return NextResponse.json({ error: "Invalid signature" }, { status: 400 });
   }
 }

@@ -10,6 +10,7 @@
   },
   "dependencies": {
     "@paddle/paddle-js": "^1.6.4",
+    "@paddle/paddle-node-sdk": "^3.10.0",
     "@polar-sh/sdk": "^0.49.0",
     "@studio-freight/react-lenis": "^0.0.47",
     "@supabase/ssr": "^0.12.4",
